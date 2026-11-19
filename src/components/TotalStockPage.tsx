@@ -21,15 +21,20 @@ import {
   DollarSign,
   ArrowUpDown,
   Download,
+  History,
+  AlertCircle,
 } from 'lucide-react';
-import { Product, CategoryInfo } from '../types/pos';
+import { Product, CategoryInfo, StockTransaction, StoreBranding } from '../types/pos';
 import { formatRs } from '../data/defaultProducts';
 import { WaqasBrandingCard } from './WaqasBrandingCard';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
+import { printStockReport, printProductList } from '../utils/printerService';
 
 interface TotalStockPageProps {
   products: Product[];
   categories: CategoryInfo[];
+  stockHistory?: StockTransaction[];
+  branding?: StoreBranding;
   onSaveProduct: (product: Product) => void;
   onDeleteProduct: (productId: string) => void;
   onDeleteAllProducts?: () => void;
@@ -42,6 +47,8 @@ interface TotalStockPageProps {
 export const TotalStockPage: React.FC<TotalStockPageProps> = ({
   products,
   categories,
+  stockHistory = [],
+  branding,
   onSaveProduct,
   onDeleteProduct,
   onDeleteAllProducts,
@@ -61,6 +68,10 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isViewDetailsOpen, setIsViewDetailsOpen] = useState(false);
   const [isPrintReportOpen, setIsPrintReportOpen] = useState(false);
+  const [isStockHistoryOpen, setIsStockHistoryOpen] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState('');
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printFeedback, setPrintFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [showConfirmDeleteAll, setShowConfirmDeleteAll] = useState(false);
 
@@ -187,7 +198,8 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
       unit: editUnit,
       costPrice: Number(editCostPrice),
       price: Number(editPrice),
-      stock: Number(editStock),
+      // Stock is strictly read-only on Stock page; updates happen only via Purchases, Sales & Returns
+      stock: editingProduct.stock,
       lowStockAlert: Number(editLowStock),
       imageUrl: editImageUrl || undefined,
     };
@@ -214,9 +226,33 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
     }
   };
 
-  // Print function
-  const handlePrintStockReport = () => {
-    window.print();
+  const filteredStockHistory = useMemo(() => {
+    const q = historyQuery.toLowerCase().trim();
+    if (!q) return stockHistory;
+    return stockHistory.filter(
+      (h) =>
+        (h.productName || '').toLowerCase().includes(q) ||
+        (h.invoiceNumber || '').toLowerCase().includes(q) ||
+        (h.transactionType || '').toLowerCase().includes(q)
+    );
+  }, [stockHistory, historyQuery]);
+
+  // Print Stock Report via printerService
+  const handlePrintStockReport = async () => {
+    setIsPrinting(true);
+    setPrintFeedback(null);
+    const result = await printStockReport(filteredProducts, selectedCategory, branding);
+    setIsPrinting(false);
+    setPrintFeedback({ type: result.ok ? 'success' : 'error', message: result.message });
+  };
+
+  // Print Product List Catalog via printerService
+  const handlePrintProductList = async () => {
+    setIsPrinting(true);
+    setPrintFeedback(null);
+    const result = await printProductList(filteredProducts, branding);
+    setIsPrinting(false);
+    setPrintFeedback({ type: result.ok ? 'success' : 'error', message: result.message });
   };
 
   return (
@@ -232,7 +268,7 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
         }}
         badge={`${totalItems} Items`}
         actions={
-          <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
             <button
               type="button"
               onClick={onOpenAddProduct}
@@ -251,17 +287,55 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => setIsStockHistoryOpen(true)}
+              className="px-2.5 py-1.5 sm:px-3 sm:py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold rounded-xl text-xs flex items-center gap-1 shadow-sm transition active:scale-95 cursor-pointer"
+            >
+              <History className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">History ({stockHistory.length})</span>
+            </button>
+            <button
+              type="button"
+              disabled={isPrinting}
+              onClick={handlePrintProductList}
+              className="px-2.5 py-1.5 sm:px-3 sm:py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold rounded-xl text-xs flex items-center gap-1 shadow-sm transition active:scale-95 cursor-pointer"
+            >
+              <Printer className="w-3.5 h-3.5 text-sky-400" />
+              <span className="hidden md:inline">Product List</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setIsPrintReportOpen(true)}
               className="px-2.5 py-1.5 sm:px-3 sm:py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold rounded-xl text-xs flex items-center gap-1 shadow-sm transition active:scale-95 cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5 text-amber-400" />
-              <span className="hidden sm:inline">Print</span>
+              <span className="hidden sm:inline">Print Stock</span>
             </button>
           </div>
         }
       />
 
       <div className="flex-1 flex flex-col p-3 sm:p-5 lg:p-6 w-full gap-3 overflow-y-auto">
+        {printFeedback && (
+          <div
+            className={`px-4 py-2.5 rounded-2xl border flex items-center justify-between gap-2 text-xs font-bold ${
+              printFeedback.type === 'success'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {printFeedback.type === 'error' ? (
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              )}
+              <span>{printFeedback.message}</span>
+            </div>
+            <button type="button" onClick={() => setPrintFeedback(null)} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
         {/* Top 3 Summary Cards */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -335,7 +409,7 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
         <div className="mb-4 bg-red-50 border-2 border-red-300 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-sm">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <AlertTriangle className="w-5 h-5 animate-pulse" />
+              <AlertTriangle className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -705,9 +779,9 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
       </div>
 
       {/* ============================================================== */}
-      {/* 5. BOTTOM 4 ACTION BUTTONS (MATCHING REFERENCE SCREENSHOT)     */}
+      {/* 5. BOTTOM ACTION BUTTONS                                       */}
       {/* ============================================================== */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3.5 mt-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-3 mt-4">
         {/* 1. Green Button: Scan Barcode */}
         <button
           onClick={onOpenScanner}
@@ -726,22 +800,33 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
           <span>Add Product</span>
         </button>
 
-        {/* 3. Purple Button: View Details */}
+        {/* 3. Teal Button: Stock History */}
         <button
-          onClick={() => setIsViewDetailsOpen(true)}
-          className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[#7c3aed] hover:bg-[#6d28d9] active:scale-98 text-white font-bold text-xs sm:text-sm shadow-sm transition-all cursor-pointer"
+          onClick={() => setIsStockHistoryOpen(true)}
+          className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[#0f766e] hover:bg-[#115e59] active:scale-98 text-white font-bold text-xs sm:text-sm shadow-sm transition-all cursor-pointer"
         >
-          <Eye className="w-5 h-5 stroke-[2]" />
-          <span>View Details</span>
+          <History className="w-5 h-5 stroke-[2]" />
+          <span>Stock History ({stockHistory.length})</span>
         </button>
 
-        {/* 4. Orange/Amber Button: Print Report */}
+        {/* 4. Blue-Grey Button: Print Product List */}
         <button
-          onClick={() => setIsPrintReportOpen(true)}
-          className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[#f59e0b] hover:bg-[#d97706] active:scale-98 text-white font-bold text-xs sm:text-sm shadow-sm transition-all cursor-pointer"
+          type="button"
+          disabled={isPrinting}
+          onClick={handlePrintProductList}
+          className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[#1e40af] hover:bg-[#1e3a8a] active:scale-98 text-white font-bold text-xs sm:text-sm shadow-sm transition-all cursor-pointer"
         >
           <Printer className="w-5 h-5 stroke-[2]" />
-          <span>Print Report</span>
+          <span>Print Product List</span>
+        </button>
+
+        {/* 5. Amber Button: Print Stock Report */}
+        <button
+          onClick={() => setIsPrintReportOpen(true)}
+          className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[#f59e0b] hover:bg-[#d97706] active:scale-98 text-white font-bold text-xs sm:text-sm shadow-sm transition-all cursor-pointer col-span-2 lg:col-span-1"
+        >
+          <Printer className="w-5 h-5 stroke-[2]" />
+          <span>Print Stock Report</span>
         </button>
       </div>
 
@@ -908,21 +993,21 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                 </div>
               </div>
 
-              {/* Current Stock & Low Stock Alert */}
+              {/* Current Stock (Strictly Read-Only) & Low Stock Alert */}
               <div className="grid grid-cols-2 gap-3 p-3 bg-emerald-50/50 rounded-2xl border border-emerald-100">
                 <div>
                   <label className="block text-xs font-bold text-emerald-900 mb-1">
-                    Current Stock Quantity
+                    Current Stock Quantity (Read-Only)
                   </label>
                   <input
                     type="number"
-                    min="0"
+                    disabled
+                    readOnly
                     value={editStock}
-                    onChange={(e) => setEditStock(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-sm border border-emerald-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/30 font-black text-emerald-900 bg-white"
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl font-black text-slate-600 bg-slate-100 cursor-not-allowed"
                   />
-                  <span className="text-[10px] text-emerald-700 font-medium block mt-1">
-                    Direct stock inventory count
+                  <span className="text-[10px] text-slate-600 font-semibold block mt-1">
+                    Updates automatically only via Saved Purchases, Sales & Returns
                   </span>
                 </div>
 
@@ -965,7 +1050,7 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                   className="px-5 py-2 bg-[#00994d] hover:bg-[#008040] text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 cursor-pointer"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Update Stock Record</span>
+                  <span>Save Product Details</span>
                 </button>
               </div>
             </form>
@@ -1097,20 +1182,32 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
       {isPrintReportOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
           <div className="bg-white rounded-3xl w-full max-w-3xl shadow-2xl border border-slate-200 overflow-hidden my-6 max-h-[92vh] flex flex-col">
-            <div className="bg-[#f59e0b] px-5 py-4 text-white flex items-center justify-between print:hidden">
+            <div className="bg-[#f59e0b] px-5 py-4 text-white flex flex-wrap items-center justify-between gap-2 print:hidden">
               <div className="flex items-center gap-2.5">
                 <Printer className="w-5 h-5" />
-                <h3 className="font-bold text-base">Print Stock Valuation & Audit Report</h3>
+                <h3 className="font-bold text-base">Print Stock Valuation & Product List</h3>
               </div>
               <div className="flex items-center gap-2">
                 <button
+                  type="button"
+                  disabled={isPrinting}
+                  onClick={handlePrintProductList}
+                  className="px-3.5 py-1.5 bg-blue-800 hover:bg-blue-900 text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Product List</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isPrinting}
                   onClick={handlePrintStockReport}
                   className="px-4 py-1.5 bg-white text-amber-900 font-bold text-xs rounded-xl hover:bg-amber-50 shadow-xs flex items-center gap-1.5 cursor-pointer"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>Print Document</span>
+                  <span>{isPrinting ? 'Printing...' : 'Print Stock Report'}</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => setIsPrintReportOpen(false)}
                   className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white"
                 >
@@ -1118,6 +1215,22 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                 </button>
               </div>
             </div>
+            {printFeedback && (
+              <div
+                className={`px-5 py-2.5 text-xs font-bold border-b flex items-center gap-2 ${
+                  printFeedback.type === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-red-50 border-red-200 text-red-800'
+                }`}
+              >
+                {printFeedback.type === 'error' ? (
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                )}
+                <span>{printFeedback.message}</span>
+              </div>
+            )}
 
             {/* Printable Report Paper */}
             <div className="p-6 overflow-y-auto flex-1 bg-white text-slate-900 font-sans print:p-0">
@@ -1272,6 +1385,105 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
               >
                 Yes, Delete (ڈیلیٹ کریں)
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stock Transaction History Modal */}
+      {isStockHistoryOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-3 sm:p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl w-full max-w-4xl shadow-2xl border border-slate-200 overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="bg-teal-800 px-5 py-4 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <History className="w-5 h-5 text-emerald-300" />
+                <div>
+                  <h3 className="font-bold text-base">Stock Transaction History (اسٹاک تبدیلی کا ریکارڈ)</h3>
+                  <p className="text-[11px] text-teal-100">
+                    Automatic audit trail from Purchases, Sales, Sale Returns & Purchase Returns
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsStockHistoryOpen(false)}
+                className="w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+              <div className="relative flex-1 max-w-md">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={historyQuery}
+                  onChange={(e) => setHistoryQuery(e.target.value)}
+                  placeholder="Search by product name, invoice #, or type..."
+                  className="w-full pl-9 pr-3 py-2 text-xs bg-white border border-slate-200 rounded-xl outline-none focus:border-teal-600"
+                />
+              </div>
+              <span className="text-xs font-bold text-slate-600">
+                {filteredStockHistory.length} records
+              </span>
+            </div>
+
+            <div className="flex-1 overflow-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-100 text-slate-700 font-bold uppercase text-[11px] sticky top-0 border-b border-slate-200">
+                  <tr>
+                    <th className="py-2.5 px-3">Date & Time</th>
+                    <th className="py-2.5 px-3">Product</th>
+                    <th className="py-2.5 px-3">Type</th>
+                    <th className="py-2.5 px-3">Invoice / Ref #</th>
+                    <th className="py-2.5 px-3 text-right">Prev Stock</th>
+                    <th className="py-2.5 px-3 text-right">Change</th>
+                    <th className="py-2.5 px-3 text-right">New Stock</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredStockHistory.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-400">
+                        No stock movements recorded yet. Movements appear automatically when Purchases, Sales or Returns are saved.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredStockHistory.map((tx) => (
+                      <tr key={tx.id} className="hover:bg-slate-50">
+                        <td className="py-2.5 px-3 font-mono text-[11px] text-slate-500 whitespace-nowrap">
+                          {new Date(tx.dateTime).toLocaleString('en-PK')}
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-slate-900">{tx.productName}</td>
+                        <td className="py-2.5 px-3">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                              tx.quantityChange > 0
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-800 border border-amber-200'
+                            }`}
+                          >
+                            {tx.transactionType.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 font-mono text-slate-700">{tx.invoiceNumber}</td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-600">{tx.previousStock}</td>
+                        <td
+                          className={`py-2.5 px-3 text-right font-mono font-black tabular-nums ${
+                            tx.quantityChange > 0 ? 'text-emerald-700' : 'text-red-600'
+                          }`}
+                        >
+                          {tx.quantityChange > 0 ? `+${tx.quantityChange}` : tx.quantityChange}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono font-black tabular-nums text-slate-900">
+                          {tx.newStock}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

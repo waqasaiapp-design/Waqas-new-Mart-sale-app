@@ -23,15 +23,20 @@ import {
   ChevronRight,
   Filter,
 } from 'lucide-react';
-import { Supplier, SupplierLedgerEntry, PurchaseTransaction } from '../types/pos';
+import { Supplier, SupplierLedgerEntry, PurchaseTransaction, StoreBranding } from '../types/pos';
 import { formatRs } from '../data/defaultProducts';
 import { WaqasDualProfileCards } from './WaqasDualProfileCards';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
+import {
+  printAllSuppliersSummary,
+  printSupplierLedgerReport,
+} from '../utils/printerService';
 
 interface SupplierLedgersPageProps {
   suppliers: Supplier[];
   ledgerEntries: SupplierLedgerEntry[];
   purchases: PurchaseTransaction[];
+  branding?: StoreBranding;
   onSaveSupplier: (supplier: Supplier) => void;
   onDeleteSupplier: (supplierId: string) => void;
   onSaveLedgerEntry: (entry: SupplierLedgerEntry) => void;
@@ -45,6 +50,7 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
   suppliers,
   ledgerEntries,
   purchases,
+  branding,
   onSaveSupplier,
   onDeleteSupplier,
   onSaveLedgerEntry,
@@ -58,6 +64,8 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
   const [isAddSupplierOpen, setIsAddSupplierOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printFeedback, setPrintFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   // New Supplier Form State
   const [newSupName, setNewSupName] = useState('');
@@ -231,9 +239,47 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
     showToast(`Payment of Rs. ${amount.toFixed(0)} recorded for ${activeSupplier.name}!`);
   };
 
-  // Print Statement
-  const handlePrintStatement = () => {
-    window.print();
+  // Print Statement (Individual Supplier Ledger or All Suppliers Summary)
+  const handlePrintStatement = async (targetSupplier?: typeof suppliersWithStats[number]) => {
+    const sup = targetSupplier || activeSupplier;
+    setIsPrinting(true);
+    setPrintFeedback(null);
+
+    if (sup) {
+      const supEntries = ledgerEntries
+        .filter((e) => e.supplierId === sup.id)
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+      let running = Number(sup.payableBalance) || 0;
+      // If opening balance wasn't already added as an entry, compute forward running balance cleanly
+      const hasOpeningEntry = supEntries.some((e) => e.paymentMethod === 'Opening');
+      if (hasOpeningEntry) {
+        running = 0;
+      }
+      const computed = supEntries.map((e) => {
+        running = Math.max(0, running + (Number(e.credit) || 0) - (Number(e.debit) || 0));
+        return {
+          date: e.date,
+          description: e.description,
+          invoiceNumber: e.invoiceNumber,
+          credit: Number(e.credit) || 0,
+          debit: Number(e.debit) || 0,
+          runningBalance: running,
+        };
+      });
+
+      const res = await printSupplierLedgerReport(sup, computed, sup.currentPayable, branding);
+      setPrintFeedback({ ok: res.ok, text: res.message });
+    } else {
+      const summaryRows = filteredSuppliers.map((s) => ({
+        ...s,
+        computedPayable: s.currentPayable,
+      }));
+      const res = await printAllSuppliersSummary(summaryRows, branding);
+      setPrintFeedback({ ok: res.ok, text: res.message });
+    }
+
+    setIsPrinting(false);
   };
 
   return (
@@ -261,17 +307,31 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
             </button>
             <button
               type="button"
-              onClick={handlePrintStatement}
-              className="px-2.5 py-1.5 sm:px-3 sm:py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold rounded-xl text-xs flex items-center gap-1 shadow-sm transition active:scale-95 cursor-pointer"
+              onClick={() => handlePrintStatement()}
+              disabled={isPrinting}
+              className="px-2.5 py-1.5 sm:px-3 sm:py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-slate-200 border border-slate-700 font-bold rounded-xl text-xs flex items-center gap-1 shadow-sm transition active:scale-95 cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5 text-amber-400" />
-              <span className="hidden sm:inline">Print</span>
+              <span className="hidden sm:inline">{isPrinting ? 'Printing...' : 'Print'}</span>
             </button>
           </div>
         }
       />
 
       <div className="flex-1 min-h-0 p-3 sm:p-5 lg:p-6 w-full space-y-4 overflow-y-auto">
+        {printFeedback && (
+          <div
+            className={`px-4 py-2.5 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 ${
+              printFeedback.ok
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-red-50 border-red-200 text-red-700'
+            }`}
+          >
+            <span>{printFeedback.text}</span>
+            <button type="button" onClick={() => setPrintFeedback(null)} className="font-black cursor-pointer">×</button>
+          </div>
+        )}
+
         {/* Toast Feedback */}
         {feedbackMsg && (
           <div className="fixed top-4 right-4 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-bold animate-in fade-in">
@@ -395,11 +455,13 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
               </button>
 
               <button
-                onClick={handlePrintStatement}
-                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+                type="button"
+                onClick={() => handlePrintStatement(activeSupplier)}
+                disabled={isPrinting}
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
-                <span>Print Ledger</span>
+                <span>{isPrinting ? 'Printing...' : 'Print Ledger'}</span>
               </button>
             </div>
           </div>
@@ -564,15 +626,30 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
                         Rs. {sup.currentPayable.toFixed(0)}
                       </td>
                       <td className="py-3 px-3 text-center">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedSupplierId(sup.id);
-                          }}
-                          className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 rounded-lg text-xs font-bold"
-                        >
-                          View Ledger 👉
-                        </button>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handlePrintStatement(sup);
+                            }}
+                            disabled={isPrinting}
+                            className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                            title="Print Supplier Ledger"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedSupplierId(sup.id);
+                            }}
+                            className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 rounded-lg text-xs font-bold cursor-pointer"
+                          >
+                            View Ledger
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))

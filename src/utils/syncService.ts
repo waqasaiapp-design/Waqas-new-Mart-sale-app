@@ -10,6 +10,13 @@ import {
   CustomerLedgerEntry,
   HeldBill,
   StoreFullState,
+  PurchaseReturn,
+  ExpenseEntry,
+  StaffMember,
+  Supplier,
+  SupplierLedgerEntry,
+  PrinterSettings,
+  StockTransaction,
 } from '../types/pos';
 
 export type SyncListener = (event: SyncEvent) => void;
@@ -240,6 +247,14 @@ class SyncService {
           this.device.status = 'revoked';
           throw new Error('Device access has been revoked by store administrator.');
         }
+        if (response.status === 400) {
+          const errJson = await response.json().catch(() => ({}));
+          return {
+            success: false,
+            error: errJson.error || 'VALIDATION_ERROR',
+            message: errJson.message || 'Validation error from server.',
+          };
+        }
         throw new Error(`Sync request failed with status ${response.status}`);
       }
 
@@ -321,12 +336,44 @@ class SyncService {
     return this.postMutation('create_purchase', purchase);
   }
 
+  public syncPurchaseUpdate(purchase: PurchaseTransaction) {
+    return this.postMutation('update_purchase', purchase);
+  }
+
+  public syncPurchaseDelete(purchaseId: string) {
+    return this.postMutation('delete_purchase', { purchaseId });
+  }
+
   public syncReturn(ret: SaleReturn) {
     return this.postMutation('process_return', ret);
   }
 
+  public syncPurchaseReturn(ret: PurchaseReturn) {
+    return this.postMutation('create_purchase_return', ret);
+  }
+
   public syncStock(products: Product[]) {
     return this.postMutation('update_stock', products);
+  }
+
+  public syncStockHistory(history: StockTransaction[]) {
+    return this.postMutation('sync_stock_history', history);
+  }
+
+  public syncStaff(staffList: StaffMember[]) {
+    return this.postMutation('sync_staff', staffList);
+  }
+
+  public syncExpenses(expenses: ExpenseEntry[]) {
+    return this.postMutation('sync_expenses', expenses);
+  }
+
+  public syncSupplierLedgers(suppliers: Supplier[], ledgerEntries: SupplierLedgerEntry[]) {
+    return this.postMutation('sync_supplier_ledgers', { suppliers, ledgerEntries });
+  }
+
+  public syncPrinterSettings(settings: PrinterSettings) {
+    return this.postMutation('sync_printer_settings', settings);
   }
 
   public syncLedgers(customers: Customer[], ledgerEntries: CustomerLedgerEntry[]) {

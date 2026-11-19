@@ -124,7 +124,7 @@ export interface PurchaseItem {
   productName: string;
   barcode: string;
   currentStock: number;
-  quantity: number;
+  quantity: number; // Positive (+1, +10) adds stock; Negative (-1, -5) deducts stock
   purchaseCost: number;
   salePrice?: number;
   discount: number;
@@ -136,7 +136,9 @@ export interface PurchaseItem {
   fPrice?: number;
   store?: string;
   location?: string;
+  shelf?: string;
   wCost?: number;
+  serialImei?: string;
   imageUrl?: string;
 }
 
@@ -167,7 +169,13 @@ export interface PurchaseTransaction {
   trn?: string;
   supplierPhone?: string;
   supplierAddress?: string;
+  expensesLabel?: string;
+  expensesAmount?: number;
+  userName?: string;
+  editBy?: string;
+  hasNegativeAdjustment?: boolean;
   createdAt: string;
+  updatedAt?: string;
   status: 'saved' | 'edited' | 'cancelled';
 }
 
@@ -339,7 +347,10 @@ export type SyncEventType =
   | 'store:sync'
   | 'sale:completed'
   | 'purchase:added'
+  | 'purchase:updated'
+  | 'purchase:deleted'
   | 'return:processed'
+  | 'purchase_return:processed'
   | 'stock:updated'
   | 'customer:ledger_updated'
   | 'device:updated'
@@ -365,6 +376,12 @@ export interface StoreFullState {
   suppliers: Supplier[];
   heldBills: HeldBill[];
   branding: StoreBranding;
+  stockHistory?: StockTransaction[];
+  purchaseReturns?: PurchaseReturn[];
+  supplierLedgers?: SupplierLedgerEntry[];
+  expenses?: ExpenseEntry[];
+  staffList?: StaffMember[];
+  printerSettings?: PrinterSettings;
 }
 
 export type ReceiptPaperSize = '58mm' | '80mm' | 'a4';
@@ -749,3 +766,64 @@ export interface DefaultSubscriptionPricing {
   twelveMonths: number;
   lastUpdated?: string;
 }
+
+// ==============================================================
+// 9. STOCK TRANSACTION HISTORY & PROTECTION
+// ==============================================================
+export type StockTransactionType =
+  | 'Purchase'
+  | 'Purchase Edit'
+  | 'Purchase Cancel'
+  | 'Stock Adjustment'
+  | 'Sale'
+  | 'Sale Return'
+  | 'Purchase Return'
+  | 'Opening Stock';
+
+export interface StockTransaction {
+  id: string;
+  productId: string;
+  productName: string;
+  barcode?: string;
+  previousStock: number;
+  quantityChange: number; // + for restock, - for deduction
+  newStock: number;
+  transactionType: StockTransactionType;
+  invoiceNumber: string;
+  dateTime: string;
+  userName?: string;
+  notes?: string;
+}
+
+// ==============================================================
+// 10. COMPLETE PRINTER SYSTEM SETTINGS
+// ==============================================================
+export type PrinterConnectionType = 'system' | 'bluetooth' | 'usb' | 'network';
+export type PrinterPaperSize = '58mm' | '80mm' | 'a4';
+
+export interface PrinterSettings {
+  connectionType: PrinterConnectionType;
+  printerName: string;
+  defaultReceiptSize: PrinterPaperSize; // For thermal bills & receipts (58mm / 80mm / a4)
+  defaultReportSize: 'a4' | '80mm'; // For reports & ledgers (default a4)
+  autoCut: boolean;
+  openCashDrawer: boolean;
+  networkPrinterHost?: string;
+  networkPrinterPort?: number;
+  bluetoothDeviceName?: string;
+  usbDeviceName?: string;
+  copies: number;
+}
+
+export const DEFAULT_PRINTER_SETTINGS: PrinterSettings = {
+  connectionType: 'system',
+  printerName: 'System / Wi-Fi / Android Default Printer',
+  defaultReceiptSize: '80mm',
+  defaultReportSize: 'a4',
+  autoCut: true,
+  openCashDrawer: false,
+  networkPrinterHost: '',
+  networkPrinterPort: 9100,
+  copies: 1,
+};
+

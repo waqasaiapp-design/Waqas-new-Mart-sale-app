@@ -1063,11 +1063,16 @@ const SalePosPageInternal: React.FC<SalePosPageProps> = ({
               <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
                 {filteredProducts.map((p) => {
                   const cartMatch = cart.find((c) => c.product.id === p.id);
+                  const isOutOfStock = mode === 'sale' && p.stock <= 0;
                   return (
                     <div
                       key={p.id}
                       onClick={() => onAddToCart(p, 1)}
-                      className="bg-white rounded-2xl border border-slate-200/90 p-3 shadow-xs hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer flex flex-col justify-between group relative overflow-hidden"
+                      className={`bg-white rounded-2xl border p-3 shadow-xs transition-all cursor-pointer flex flex-col justify-between group relative overflow-hidden ${
+                        isOutOfStock
+                          ? 'border-red-200 bg-red-50/20 hover:border-red-400'
+                          : 'border-slate-200/90 hover:border-emerald-500 hover:shadow-md'
+                      }`}
                     >
                       <div>
                         <div className="w-full h-28 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center overflow-hidden mb-2 relative">
@@ -1075,7 +1080,9 @@ const SalePosPageInternal: React.FC<SalePosPageProps> = ({
                             <img
                               src={p.imageUrl}
                               alt={p.name}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                              className={`w-full h-full object-cover group-hover:scale-105 transition-transform ${
+                                isOutOfStock ? 'opacity-65' : ''
+                              }`}
                             />
                           ) : (
                             <ProductGraphic product={p} className="w-14 h-14" />
@@ -1085,6 +1092,11 @@ const SalePosPageInternal: React.FC<SalePosPageProps> = ({
                               {cartMatch.quantity} in cart
                             </span>
                           )}
+                          {isOutOfStock && (
+                            <span className="absolute bottom-1.5 left-1.5 bg-red-600 text-white text-[9px] font-black px-2 py-0.5 rounded-full shadow-xs uppercase">
+                              Out of Stock
+                            </span>
+                          )}
                         </div>
 
                         <h4 className="font-bold text-xs text-slate-900 line-clamp-2 leading-tight group-hover:text-emerald-700">
@@ -1092,7 +1104,7 @@ const SalePosPageInternal: React.FC<SalePosPageProps> = ({
                         </h4>
                         <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
                           <span className="truncate">{p.category}</span>
-                          <span className={p.stock < 0 ? 'text-red-600 font-bold' : 'text-slate-500 font-semibold'}>
+                          <span className={p.stock <= 0 ? 'text-red-600 font-bold' : 'text-slate-500 font-semibold'}>
                             Stock: {p.stock}
                           </span>
                         </div>
@@ -1108,7 +1120,11 @@ const SalePosPageInternal: React.FC<SalePosPageProps> = ({
                             e.stopPropagation();
                             onAddToCart(p, 1);
                           }}
-                          className="w-7 h-7 rounded-lg bg-emerald-50 hover:bg-[#16a34a] text-emerald-700 hover:text-white flex items-center justify-center font-bold text-xs transition-colors cursor-pointer"
+                          className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs transition-colors cursor-pointer ${
+                            isOutOfStock
+                              ? 'bg-red-50 text-red-500 hover:bg-red-100'
+                              : 'bg-emerald-50 hover:bg-[#16a34a] text-emerald-700 hover:text-white'
+                          }`}
                         >
                           +
                         </button>

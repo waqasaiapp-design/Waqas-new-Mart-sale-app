@@ -18,15 +18,16 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { DailyHisabRow, DailyHisabMonthRecord, SaleTransaction, PurchaseTransaction, CustomerLedgerEntry } from '../types/pos';
-import { formatRs } from '../data/defaultProducts';
+import { DailyHisabRow, SaleTransaction, PurchaseTransaction, CustomerLedgerEntry, StoreBranding } from '../types/pos';
 import { WaqasBrandingCard } from './WaqasBrandingCard';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
+import { printDailyHisabReport } from '../utils/printerService';
 
 interface DailyHisabExcelPageProps {
   transactions: SaleTransaction[];
   purchases: PurchaseTransaction[];
   customerLedgerEntries: CustomerLedgerEntry[];
+  branding?: StoreBranding;
   onNavigateToSummary?: () => void;
   onNavigateToLedgers?: () => void;
   onRecordRecovery?: (dateIso: string) => void;
@@ -39,6 +40,7 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
   transactions,
   purchases,
   customerLedgerEntries,
+  branding,
   onNavigateToSummary,
   onNavigateToLedgers,
   onBackToHome,
@@ -69,10 +71,12 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
   });
 
   // Cell currently being edited: { dateIso, field }
-  const [activeCell, setActiveCell] = useState<{ dateIso: string; field: keyof DailyHisabRow } | null>(null);
+  const [, setActiveCell] = useState<{ dateIso: string; field: keyof DailyHisabRow } | null>(null);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const [selectedRowDate, setSelectedRowDate] = useState<string | null>(null);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
+  const [isPrinting, setIsPrinting] = useState<boolean>(false);
+  const [printFeedback, setPrintFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Quick save to localStorage
   const persistChanges = (updated: Record<string, Record<string, Partial<DailyHisabRow>>>) => {
@@ -432,153 +436,27 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
     return list;
   }, [selectedYear]);
 
-  // Robust Print Handler using hidden printable iframe to prevent cutoff and layout clipping
-  const handlePrintDailyHisab = () => {
-    try {
-      const printFrame = document.createElement('iframe');
-      printFrame.style.position = 'fixed';
-      printFrame.style.right = '0';
-      printFrame.style.bottom = '0';
-      printFrame.style.width = '0';
-      printFrame.style.height = '0';
-      printFrame.style.border = '0';
-      document.body.appendChild(printFrame);
-
-      const rowsHtml = computedRows.map((r, idx) => {
-        const isOdd = idx % 2 === 1;
-        return `
-          <tr style="background-color: ${isOdd ? '#f8fafc' : '#ffffff'};">
-            <td style="border:1px solid #334155; padding:4px 6px; text-align:center; font-weight:600;">${r.date}</td>
-            <td style="border:1px solid #334155; padding:4px 6px; text-align:right; font-family:monospace;">${r.openingCash.toFixed(0)}</td>
-            <td style="border:1px solid #334155; padding:4px 6px; text-align:right; font-family:monospace; font-weight:700;">${r.dailySale > 0 ? r.dailySale.toFixed(0) : '-'}</td>
-            <td style="border:1px solid #334155; padding:4px 6px; text-align:right; font-family:monospace;">${r.dailyPurchase > 0 ? r.dailyPurchase.toFixed(0) : '-'}</td>
-            <td style="border:1px solid #334155; padding:4px 6px; text-align:right; font-family:monospace;">${r.dailyExtra > 0 ? r.dailyExtra.toFixed(0) : '-'}</td>
-            <td style="border:1px solid #334155; padding:4px 6px; text-align:right; font-family:monospace; color:#b91c1c;">${r.dailyCredit > 0 ? r.dailyCredit.toFixed(0) : '-'}</td>
-            <td style="border:1px solid #334155; padding:4px 6px; text-align:right; font-family:monospace; color:#15803d;">${r.dailyRecovery > 0 ? r.dailyRecovery.toFixed(0) : '-'}</td>
-            <td style="border:1px solid #334155; padding:4px 6px; text-align:right; font-family:monospace;">${r.dailyKitchen > 0 ? r.dailyKitchen.toFixed(0) : '-'}</td>
-            <td style="border:1px solid #334155; padding:4px 6px; text-align:right; font-family:monospace;">${r.dailyExpenses > 0 ? r.dailyExpenses.toFixed(0) : '-'}</td>
-            <td style="border:1px solid #334155; padding:4px 6px; text-align:left; font-size:10px;">${r.details || '-'}</td>
-            <td style="border:1px solid #334155; padding:4px 6px; text-align:right; font-family:monospace; font-weight:700;">${r.closingCash.toFixed(0)}</td>
-          </tr>
-        `;
-      }).join('');
-
-      const content = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Waqas Mart - Daily Hisab ${activeMonthName} ${selectedYear}</title>
-          <style>
-            @page { size: A4 landscape; margin: 8mm; }
-            * { box-sizing: border-box; }
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 0; padding: 12px; font-size: 11px; color: #0f172a; }
-            .header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 10px; }
-            .title { font-size: 20px; font-weight: 900; color: #16a34a; margin: 0; }
-            .subtitle { font-size: 13px; font-weight: 700; color: #1e293b; margin-top: 2px; }
-            .meta { text-align: right; font-size: 11px; color: #475569; }
-            .stats-bar { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-bottom: 10px; text-align: center; }
-            .stat-box { border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 6px; background: #f8fafc; }
-            .stat-label { font-size: 9px; text-transform: uppercase; color: #64748b; font-weight: 700; }
-            .stat-val { font-size: 12px; font-weight: 800; font-family: monospace; color: #0f172a; }
-            table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
-            th { background-color: #f1f5f9; border: 1px solid #334155; padding: 5px 6px; text-align: center; font-weight: 800; }
-            .total-row { background-color: #3730a3 !important; color: #ffffff !important; font-weight: 800; font-family: monospace; }
-            .total-row td { border: 1px solid #3730a3; padding: 6px; }
-            .formula { margin-top: 8px; font-size: 9.5px; color: #475569; font-style: italic; }
-            .signatures { display: flex; justify-content: space-between; margin-top: 30px; padding: 0 40px; }
-            .sig-box { width: 160px; border-top: 1px solid #334155; text-align: center; padding-top: 4px; font-size: 11px; font-weight: 700; color: #1e293b; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <div>
-              <div class="title">WAQAS MART (وقاص مارٹ)</div>
-              <div class="subtitle">Monthly Business Hisab Bill & Register (ماہانہ کاروباری حساب بل برائے اونر / مالک) — ${activeMonthName} ${selectedYear}</div>
-            </div>
-            <div class="meta">
-              <div><strong>Printed:</strong> ${new Date().toLocaleDateString('en-GB')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-              <div><strong>Initial Cash:</strong> Rs. ${totals.firstOpening.toFixed(0)}</div>
-              <div><strong>Final Closing:</strong> Rs. ${totals.finalClosing.toFixed(0)}</div>
-            </div>
-          </div>
-
-          <div class="stats-bar">
-            <div class="stat-box"><div class="stat-label">Opening Cash</div><div class="stat-val">${totals.firstOpening.toFixed(0)}</div></div>
-            <div class="stat-box"><div class="stat-label">Total Sales</div><div class="stat-val" style="color:#16a34a;">${totals.totalSale.toFixed(0)}</div></div>
-            <div class="stat-box"><div class="stat-label">Total Purchases</div><div class="stat-val" style="color:#2563eb;">${totals.totalPurchase.toFixed(0)}</div></div>
-            <div class="stat-box"><div class="stat-label">Total Udhar (Credit)</div><div class="stat-val" style="color:#dc2626;">${totals.totalCredit.toFixed(0)}</div></div>
-            <div class="stat-box"><div class="stat-label">Total Recovery</div><div class="stat-val" style="color:#16a34a;">${totals.totalRecovery.toFixed(0)}</div></div>
-            <div class="stat-box"><div class="stat-label">Final Closing Cash</div><div class="stat-val" style="color:#3730a3;">${totals.finalClosing.toFixed(0)}</div></div>
-          </div>
-
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Opening Cash</th>
-                <th>Daily Sale</th>
-                <th>Daily Purchase</th>
-                <th>Daily Extra</th>
-                <th>Daily Credit</th>
-                <th>Daily Recovery</th>
-                <th>Daily Kitchen</th>
-                <th>Daily Expenses</th>
-                <th>Details</th>
-                <th>Closing Cash</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rowsHtml}
-            </tbody>
-            <tfoot>
-              <tr class="total-row">
-                <td style="text-align:center;">TOTAL</td>
-                <td style="text-align:right;">${totals.firstOpening.toFixed(0)}</td>
-                <td style="text-align:right;">${totals.totalSale.toFixed(0)}</td>
-                <td style="text-align:right;">${totals.totalPurchase.toFixed(0)}</td>
-                <td style="text-align:right;">${totals.totalExtra.toFixed(0)}</td>
-                <td style="text-align:right;">${totals.totalCredit.toFixed(0)}</td>
-                <td style="text-align:right;">${totals.totalRecovery.toFixed(0)}</td>
-                <td style="text-align:right;">${totals.totalKitchen.toFixed(0)}</td>
-                <td style="text-align:right;">${totals.totalExpenses.toFixed(0)}</td>
-                <td style="text-align:left; font-size:10px;">Net Period Flow</td>
-                <td style="text-align:right;">${totals.finalClosing.toFixed(0)}</td>
-              </tr>
-            </tfoot>
-          </table>
-
-          <div class="formula">
-            * Accounting Formula: Closing Cash = Opening Cash + (Daily Sale - Daily Credit) + Daily Extra + Daily Recovery - Daily Purchase - Daily Kitchen - Daily Expenses
-          </div>
-
-          <div class="signatures">
-            <div class="sig-box">Prepared By (Cashier)</div>
-            <div class="sig-box">Verified By (Accountant)</div>
-            <div class="sig-box">Approved By (Proprietor)</div>
-          </div>
-        </body>
-        </html>
-      `;
-
-      const frameDoc = printFrame.contentWindow?.document || printFrame.contentDocument;
-      if (frameDoc) {
-        frameDoc.open();
-        frameDoc.write(content);
-        frameDoc.close();
-        setTimeout(() => {
-          printFrame.contentWindow?.focus();
-          printFrame.contentWindow?.print();
-          setTimeout(() => {
-            if (document.body.contains(printFrame)) {
-              document.body.removeChild(printFrame);
-            }
-          }, 4000);
-        }, 500);
-      }
-    } catch (err) {
-      console.error('Print failed, falling back to window.print():', err);
-      window.print();
-    }
+  // Clean print handler via centralized printerService (A4 landscape Daily Hisab)
+  const handlePrintDailyHisab = async () => {
+    setIsPrinting(true);
+    setPrintFeedback(null);
+    const result = await printDailyHisabReport(
+      `${activeMonthName} ${selectedYear}`,
+      computedRows,
+      {
+        sale: totals.totalSale,
+        purchase: totals.totalPurchase,
+        extra: totals.totalExtra,
+        credit: totals.totalCredit,
+        recovery: totals.totalRecovery,
+        kitchen: totals.totalKitchen,
+        expenses: totals.totalExpenses,
+        closingCash: totals.finalClosing,
+      },
+      branding
+    );
+    setIsPrinting(false);
+    setPrintFeedback({ type: result.ok ? 'success' : 'error', message: result.message });
   };
 
   return (
@@ -616,16 +494,67 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
         }
       />
 
-      <div className="flex-1 min-h-0 p-3 sm:p-5 lg:p-6 w-full space-y-3 overflow-y-auto">
-        {/* WAQAS MART Dual Profile Cards */}
-        <WaqasBrandingCard variant="banner" />
+      <div className="flex-1 min-h-0 p-3 sm:p-4 lg:p-5 w-full space-y-3 overflow-y-auto">
+        {printFeedback && (
+          <div
+            className={`px-4 py-2.5 rounded-2xl border flex items-center justify-between gap-2 text-xs font-bold ${
+              printFeedback.type === 'success'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {printFeedback.type === 'error' ? (
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              )}
+              <span>{printFeedback.message}</span>
+            </div>
+            <button type="button" onClick={() => setPrintFeedback(null)} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
-      {/* 1. TOP EXCEL-STYLE CONTROL RIBBON */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-3 sm:p-4 space-y-3">
+        {/* Top Summary KPI Strip (Green / Blue / White / Light Grey) */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+          <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-2xs">
+            <span className="text-[11px] font-bold text-slate-500 uppercase block">1st Opening Cash</span>
+            <span className="text-base sm:text-lg font-black text-slate-900 tabular-nums">Rs. {totals.firstOpening.toLocaleString('en-PK')}</span>
+          </div>
+          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 shadow-2xs">
+            <span className="text-[11px] font-bold text-emerald-800 uppercase block">Monthly Sales</span>
+            <span className="text-base sm:text-lg font-black text-emerald-700 tabular-nums">Rs. {totals.totalSale.toLocaleString('en-PK')}</span>
+          </div>
+          <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3 shadow-2xs">
+            <span className="text-[11px] font-bold text-blue-800 uppercase block">Monthly Purchase</span>
+            <span className="text-base sm:text-lg font-black text-blue-700 tabular-nums">Rs. {totals.totalPurchase.toLocaleString('en-PK')}</span>
+          </div>
+          <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-2xs">
+            <span className="text-[11px] font-bold text-slate-500 uppercase block">Credit / Recovery</span>
+            <span className="text-sm sm:text-base font-black text-slate-800 tabular-nums">
+              {totals.totalCredit.toLocaleString()} / <span className="text-emerald-700">{totals.totalRecovery.toLocaleString()}</span>
+            </span>
+          </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 shadow-2xs">
+            <span className="text-[11px] font-bold text-slate-600 uppercase block">Kitchen + Expenses</span>
+            <span className="text-base sm:text-lg font-black text-slate-800 tabular-nums">
+              Rs. {(totals.totalKitchen + totals.totalExpenses).toLocaleString('en-PK')}
+            </span>
+          </div>
+          <div className="bg-gradient-to-br from-emerald-700 to-blue-800 text-white rounded-2xl p-3 shadow-sm">
+            <span className="text-[11px] font-bold text-emerald-100 uppercase block">Final Closing Cash</span>
+            <span className="text-base sm:text-xl font-black text-white tabular-nums">Rs. {totals.finalClosing.toLocaleString('en-PK')}</span>
+          </div>
+        </div>
+
+      {/* 1. CLEAN CONTROL RIBBON */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-3.5 sm:p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           {/* Brand & Page Title */}
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-md shadow-emerald-600/20 shrink-0">
+            <div className="w-11 h-11 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm shrink-0">
               <FileSpreadsheet className="w-6 h-6 stroke-[2.2]" />
             </div>
             <div>
@@ -633,12 +562,12 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
                 <h1 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">
                   Daily Hisab (روزانہ حساب کھاتہ)
                 </h1>
-                <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase px-2 py-0.5 rounded-full border border-emerald-300">
-                  Excel Spreadsheet
+                <span className="bg-blue-50 text-blue-800 text-[11px] font-black uppercase px-2.5 py-0.5 rounded-full border border-blue-200">
+                  {activeMonthName} {selectedYear}
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-medium">
-                Full editing with automated closing formula: Opening + (Sale − Credit) + Extra + Recovery − Purchase − Kitchen − Expenses
+                Closing Cash = Opening + (Sale − Credit) + Extra + Recovery − Purchase − Kitchen − Expenses
               </p>
             </div>
           </div>
@@ -649,10 +578,10 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
               <button
                 type="button"
                 onClick={onNavigateToSummary}
-                className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-xl font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
               >
-                <TrendingUp className="w-3.5 h-3.5" />
-                <span>Sale Summary Analytics</span>
+                <TrendingUp className="w-4 h-4" />
+                <span>Reports</span>
               </button>
             )}
 
@@ -660,37 +589,37 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
               <button
                 type="button"
                 onClick={onNavigateToLedgers}
-                className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-xl font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
               >
-                <span>Customer Udhar Ledgers</span>
+                <span>Customer Ledgers</span>
               </button>
             )}
 
             <button
               type="button"
               onClick={handleExportCSV}
-              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
               title="Download Excel CSV Spreadsheet"
             >
-              <Download className="w-3.5 h-3.5" />
+              <Download className="w-4 h-4" />
               <span>Export Excel</span>
             </button>
 
-            {/* Robust Print Buttons: Quick Direct Print & Print Preview Modal */}
             <button
               type="button"
+              disabled={isPrinting}
               onClick={handlePrintDailyHisab}
-              className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 rounded-xl font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+              className="px-3.5 py-2 bg-blue-700 hover:bg-blue-800 disabled:bg-blue-400 text-white rounded-xl font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
               title="Print Daily Hisab Register Sheet"
             >
-              <Printer className="w-3.5 h-3.5 text-slate-700" />
-              <span>Print Sheet (پرنٹ کریں)</span>
+              <Printer className="w-4 h-4" />
+              <span>{isPrinting ? 'Printing...' : 'Print Daily Report'}</span>
             </button>
 
             <button
               type="button"
               onClick={() => setIsPrintModalOpen(true)}
-              className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold flex items-center gap-1 transition-colors cursor-pointer text-[11px]"
+              className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex items-center gap-1 transition-colors cursor-pointer"
               title="Open Printable Preview Modal"
             >
               <span>Preview</span>
@@ -699,7 +628,7 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
             <button
               type="button"
               onClick={handleResetMonth}
-              className="px-3 py-1.5 bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded-xl font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-3 py-2 bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded-xl font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
               title="Reset any manual cell overrides for this month"
             >
               <RotateCcw className="w-3.5 h-3.5" />
@@ -709,19 +638,18 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
         </div>
 
         {/* Month Selector & Initial Opening Cash Setup */}
-        <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs">
-          {/* Month Navigation */}
+        <div className="pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={handlePrevMonth}
-              className="p-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 cursor-pointer"
+              className="p-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 cursor-pointer"
               title="Previous Month"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
 
-            <div className="flex items-center gap-1.5 font-bold text-sm text-slate-800 bg-slate-50 px-3 py-1 rounded-xl border border-slate-200">
+            <div className="flex items-center gap-1.5 font-black text-sm text-slate-800 bg-slate-50 px-3.5 py-1.5 rounded-xl border border-slate-200">
               <Calendar className="w-4 h-4 text-emerald-600" />
               <span>{activeMonthName} {selectedYear}</span>
             </div>
@@ -729,7 +657,7 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
             <button
               type="button"
               onClick={handleNextMonth}
-              className="p-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-700 cursor-pointer"
+              className="p-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 cursor-pointer"
               title="Next Month"
             >
               <ChevronRight className="w-4 h-4" />
@@ -738,7 +666,7 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(Number(e.target.value))}
-              className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-semibold cursor-pointer"
+              className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs sm:text-sm font-bold cursor-pointer"
             >
               {monthNames.map((name, idx) => (
                 <option key={name} value={idx + 1}>
@@ -747,9 +675,8 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
               ))}
             </select>
 
-            {/* UNRESTRICTED DYNAMIC YEAR SELECTOR + DIRECT NUMBER INPUT */}
-            <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-0.5">
-              <span className="text-[10px] uppercase font-bold text-slate-400">Year:</span>
+            <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1">
+              <span className="text-[11px] uppercase font-bold text-slate-500">Year:</span>
               <input
                 type="number"
                 min="1990"
@@ -761,13 +688,13 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
                     setSelectedYear(val);
                   }
                 }}
-                className="w-16 font-mono font-bold text-xs text-slate-900 text-center bg-slate-50 border border-slate-200 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className="w-16 font-mono font-bold text-sm text-slate-900 text-center bg-slate-50 border border-slate-200 rounded-lg px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 title="Enter Any Year up to 3000"
               />
               <select
                 value={selectedYear}
                 onChange={(e) => setSelectedYear(Number(e.target.value))}
-                className="bg-white text-xs font-semibold text-slate-700 border-l border-slate-200 pl-1 cursor-pointer focus:outline-none"
+                className="bg-white text-xs sm:text-sm font-bold text-slate-700 border-l border-slate-200 pl-2 cursor-pointer focus:outline-none"
                 title="Select Year from list (up to 3000)"
               >
                 {availableYears.map((y) => (
@@ -779,311 +706,305 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
             </div>
           </div>
 
-          {/* Month 1st Day Opening Cash Configuration */}
-          <div className="flex items-center gap-2 bg-emerald-50/70 px-3 py-1.5 rounded-xl border border-emerald-200 text-xs">
-            <span className="font-bold text-emerald-900">Month Initial Opening Cash:</span>
+          <div className="flex items-center gap-2 bg-emerald-50 px-3.5 py-1.5 rounded-xl border border-emerald-200 text-xs sm:text-sm">
+            <span className="font-bold text-emerald-900">1st Day Opening Cash:</span>
             <input
               type="number"
               value={initialOpeningCash}
               onChange={(e) => {
                 const val = parseFloat(e.target.value) || 0;
                 setInitialOpeningCash(val);
-                // Also update day 1 if not manually locked
                 handleCellChange(`${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`, 'openingCash', String(val));
               }}
-              className="w-24 px-2 py-0.5 bg-white border border-emerald-300 rounded font-mono font-bold text-emerald-950 focus:outline-none focus:ring-1 focus:ring-emerald-500 text-right"
+              className="w-28 px-2.5 py-1 bg-white border border-emerald-300 rounded-lg font-mono font-black text-emerald-950 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-right tabular-nums"
             />
-            <span className="text-[11px] text-emerald-700 font-semibold">Rs.</span>
+            <span className="text-xs text-emerald-700 font-bold">Rs.</span>
           </div>
 
-          {/* Success toast badge */}
           {saveSuccessMsg && (
-            <div className="flex items-center gap-1.5 text-emerald-700 font-bold bg-emerald-100 px-3 py-1 rounded-xl animate-fade-in text-xs">
-              <CheckCircle2 className="w-3.5 h-3.5" />
+            <div className="flex items-center gap-1.5 text-emerald-800 font-bold bg-emerald-100 px-3 py-1.5 rounded-xl animate-fade-in text-xs">
+              <CheckCircle2 className="w-4 h-4" />
               <span>{saveSuccessMsg}</span>
             </div>
           )}
         </div>
       </div>
 
-      {/* 2. EXCEL SPREADSHEET TABLE MATCHING USER'S SCREENSHOT EXACTLY */}
-      <div className="bg-white rounded-2xl border border-slate-300 shadow-md overflow-hidden">
-        {/* Spreadsheet Mobile Swipe Notification */}
-        <div className="lg:hidden px-3 py-1.5 bg-emerald-50 border-b border-emerald-200 text-emerald-900 text-[11px] font-bold flex items-center justify-between">
-          <span>👉 دائیں طرف اسکرول کریں اور کسی بھی سیل پر کلک کر کے قیمت تبدیل کریں</span>
-          <span className="font-mono text-emerald-700 text-[10px]">Swipe horizontally</span>
+      {/* 2. LARGE DESKTOP-OPTIMIZED DAILY HISAB REGISTER TABLE */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-md overflow-hidden">
+        <div className="lg:hidden px-3 py-2 bg-blue-50 border-b border-blue-200 text-blue-900 text-xs font-bold flex items-center justify-between">
+          <span>👉 دائیں طرف اسکرول کریں اور کسی بھی سیل میں رقم درج کریں</span>
+          <span className="font-mono text-blue-700 text-[11px]">Swipe horizontally</span>
         </div>
 
-        <div className="overflow-x-auto max-h-[72vh] overflow-y-auto">
-          <table className="w-full text-xs border-collapse border border-slate-300 font-sans">
-            {/* EXCEL COLUMN LETTERS (A, B, C, D...) */}
-            <thead className="bg-[#f1f5f9] text-slate-500 font-mono text-[10px] text-center select-none sticky top-0 z-20 border-b border-slate-300">
-              <tr>
-                <th className="w-10 border border-slate-300 bg-[#e2e8f0] py-1 font-bold">#</th>
-                <th className="w-28 border border-slate-300 py-1">A</th>
-                <th className="w-28 border border-slate-300 py-1">B</th>
-                <th className="w-28 border border-slate-300 py-1">C</th>
-                <th className="w-28 border border-slate-300 py-1">D</th>
-                <th className="w-24 border border-slate-300 py-1">E</th>
-                <th className="w-28 border border-slate-300 py-1">F</th>
-                <th className="w-28 border border-slate-300 py-1">G</th>
-                <th className="w-28 border border-slate-300 py-1">H</th>
-                <th className="w-28 border border-slate-300 py-1">I</th>
-                <th className="min-w-[160px] border border-slate-300 py-1">J</th>
-                <th className="w-32 border border-slate-300 py-1">K</th>
-              </tr>
-
-              {/* EXACT COLUMN ORDER REQUESTED BY USER MATCHING SCREENSHOT ROW 6 */}
-              <tr className="bg-[#86efac] text-emerald-950 font-black text-[11px] uppercase tracking-wide border-b-2 border-emerald-500">
-                <th className="border border-emerald-400 py-2.5 px-2 bg-[#4ade80] text-center text-slate-800">
-                  Row
+        <div className="overflow-x-auto max-h-[78vh] overflow-y-auto">
+          <table className="w-full min-w-[1260px] text-xs sm:text-sm border-collapse font-sans">
+            <thead className="sticky top-0 z-20 select-none">
+              <tr className="bg-gradient-to-r from-emerald-800 via-emerald-700 to-blue-800 text-white font-black text-xs sm:text-[13px] tracking-wide border-b-2 border-emerald-900">
+                <th className="border-r border-white/15 py-3.5 px-3 text-center w-12 bg-emerald-900/50">#</th>
+                <th className="border-r border-white/15 py-3.5 px-3.5 text-right whitespace-nowrap min-w-[125px] bg-emerald-900/30">
+                  1. Opening Cash
                 </th>
-                <th className="border border-emerald-400 py-2.5 px-3 text-left whitespace-nowrap">
-                  1. Date
+                <th className="border-r border-white/15 py-3.5 px-3.5 text-center whitespace-nowrap min-w-[115px]">
+                  2. Date
                 </th>
-                <th className="border border-emerald-400 py-2.5 px-3 text-right whitespace-nowrap bg-[#bbf7d0]">
-                  2. Opening Cash
-                </th>
-                <th className="border border-emerald-400 py-2.5 px-3 text-right whitespace-nowrap">
+                <th className="border-r border-white/15 py-3.5 px-3.5 text-right whitespace-nowrap min-w-[120px]">
                   3. Daily Sale
                 </th>
-                <th className="border border-emerald-400 py-2.5 px-3 text-right whitespace-nowrap">
+                <th className="border-r border-white/15 py-3.5 px-3.5 text-right whitespace-nowrap min-w-[120px]">
                   4. Daily Purchase
                 </th>
-                <th className="border border-emerald-400 py-2.5 px-3 text-right whitespace-nowrap">
+                <th className="border-r border-white/15 py-3.5 px-3.5 text-right whitespace-nowrap min-w-[110px]">
                   5. Daily Extra
                 </th>
-                <th className="border border-emerald-400 py-2.5 px-3 text-right whitespace-nowrap">
+                <th className="border-r border-white/15 py-3.5 px-3.5 text-right whitespace-nowrap min-w-[115px]">
                   6. Daily Credit
                 </th>
-                <th className="border border-emerald-400 py-2.5 px-3 text-right whitespace-nowrap">
+                <th className="border-r border-white/15 py-3.5 px-3.5 text-right whitespace-nowrap min-w-[120px]">
                   7. Daily Recovery
                 </th>
-                <th className="border border-emerald-400 py-2.5 px-3 text-right whitespace-nowrap">
+                <th className="border-r border-white/15 py-3.5 px-3.5 text-right whitespace-nowrap min-w-[110px]">
                   8. Daily Kitchen
                 </th>
-                <th className="border border-emerald-400 py-2.5 px-3 text-right whitespace-nowrap">
+                <th className="border-r border-white/15 py-3.5 px-3.5 text-right whitespace-nowrap min-w-[120px]">
                   9. Daily Expenses
                 </th>
-                <th className="border border-emerald-400 py-2.5 px-3 text-left whitespace-nowrap">
+                <th className="border-r border-white/15 py-3.5 px-3.5 text-left whitespace-nowrap min-w-[210px]">
                   10. Details
                 </th>
-                <th className="border border-emerald-400 py-2.5 px-3 text-right whitespace-nowrap bg-[#bbf7d0]">
+                <th className="py-3.5 px-3.5 text-right whitespace-nowrap min-w-[135px] bg-blue-900/50">
                   11. Closing Cash
                 </th>
               </tr>
             </thead>
 
-            <tbody className="divide-y divide-slate-200 font-mono text-[11px]">
+            <tbody className="divide-y divide-slate-200 text-xs sm:text-sm">
               {computedRows.map((row, idx) => {
-                const rowNumber = idx + 7; // Matches row numbers in screenshot (Row 7 = 01/10/2026)
+                const dayIndex = idx + 1;
                 const isSelected = selectedRowDate === row.dateIso;
 
                 return (
                   <tr
                     key={row.dateIso}
                     onClick={() => setSelectedRowDate(row.dateIso)}
-                    className={`transition-colors ${
+                    className={`transition-colors min-h-[46px] ${
                       isSelected
-                        ? 'bg-blue-50/90'
+                        ? 'bg-blue-50/95 ring-1 ring-inset ring-blue-300'
                         : idx % 2 === 0
-                        ? 'bg-white hover:bg-slate-50'
-                        : 'bg-[#fcfdfd] hover:bg-slate-50'
+                        ? 'bg-white hover:bg-emerald-50/40'
+                        : 'bg-slate-50/90 hover:bg-emerald-50/40'
                     }`}
                   >
-                    {/* Excel Row Index on Left (e.g. 7, 8, 9...) */}
-                    <td className="border border-slate-300 py-1.5 px-2 text-center text-slate-400 bg-[#f8fafc] font-bold select-none text-[10px]">
-                      {rowNumber}
+                    <td className="border-r border-slate-200 py-2.5 px-2.5 text-center text-slate-500 bg-slate-100/70 font-bold select-none tabular-nums">
+                      {dayIndex}
                     </td>
 
-                    {/* 1. Date (DD/MM/YYYY) */}
-                    <td className="border border-slate-300 py-1.5 px-2.5 text-slate-800 font-medium whitespace-nowrap text-left font-mono">
-                      {row.date}
-                    </td>
-
-                    {/* 2. Opening Cash (FIRST NUMERIC COLUMN) */}
-                    <td className="border border-slate-300 py-1 px-1.5 text-right bg-emerald-50/30">
+                    {/* 1. Opening Cash */}
+                    <td className="border-r border-slate-200 py-1.5 px-2 text-right bg-emerald-50/35">
                       <input
                         type="number"
                         value={row.openingCash === 0 ? '' : row.openingCash}
                         placeholder="0"
+                        onFocus={() => setActiveCell({ dateIso: row.dateIso, field: 'openingCash' })}
+                        onBlur={() => setActiveCell(null)}
                         onChange={(e) => handleCellChange(row.dateIso, 'openingCash', e.target.value)}
-                        className={`w-full py-0.5 px-1 text-right bg-transparent border-0 focus:ring-2 focus:ring-emerald-500 rounded font-mono text-[11px] tabular-nums font-semibold ${
-                          row.isOpeningCashManual ? 'text-amber-800 font-bold' : 'text-slate-800'
+                        className={`w-full py-1.5 px-2 text-right bg-transparent border border-transparent hover:border-slate-300 focus:bg-white focus:border-emerald-500 focus:outline-none rounded-lg font-mono text-xs sm:text-sm tabular-nums font-bold ${
+                          row.isOpeningCashManual ? 'text-blue-800' : 'text-slate-800'
                         }`}
                         title={row.isOpeningCashManual ? 'Manually edited opening cash' : "Carried forward from yesterday's closing cash"}
                       />
                     </td>
 
+                    {/* 2. Date */}
+                    <td className="border-r border-slate-200 py-2.5 px-3 text-slate-900 font-bold whitespace-nowrap text-center font-mono">
+                      {row.date}
+                    </td>
+
                     {/* 3. Daily Sale */}
-                    <td className="border border-slate-300 py-1 px-1.5 text-right">
+                    <td className="border-r border-slate-200 py-1.5 px-2 text-right">
                       <input
                         type="number"
                         value={row.dailySale === 0 ? '' : row.dailySale}
                         placeholder="0"
+                        onFocus={() => setActiveCell({ dateIso: row.dateIso, field: 'dailySale' })}
+                        onBlur={() => setActiveCell(null)}
                         onChange={(e) => handleCellChange(row.dateIso, 'dailySale', e.target.value)}
-                        className="w-full py-0.5 px-1 text-right bg-transparent border-0 focus:ring-2 focus:ring-emerald-500 rounded font-mono text-[11px] tabular-nums text-slate-900 font-bold"
+                        className="w-full py-1.5 px-2 text-right bg-transparent border border-transparent hover:border-slate-300 focus:bg-white focus:border-emerald-500 focus:outline-none rounded-lg font-mono text-xs sm:text-sm tabular-nums text-emerald-800 font-black"
                       />
                     </td>
 
                     {/* 4. Daily Purchase */}
-                    <td className="border border-slate-300 py-1 px-1.5 text-right">
+                    <td className="border-r border-slate-200 py-1.5 px-2 text-right">
                       <input
                         type="number"
                         value={row.dailyPurchase === 0 ? '' : row.dailyPurchase}
                         placeholder="0"
+                        onFocus={() => setActiveCell({ dateIso: row.dateIso, field: 'dailyPurchase' })}
+                        onBlur={() => setActiveCell(null)}
                         onChange={(e) => handleCellChange(row.dateIso, 'dailyPurchase', e.target.value)}
-                        className="w-full py-0.5 px-1 text-right bg-transparent border-0 focus:ring-2 focus:ring-emerald-500 rounded font-mono text-[11px] tabular-nums text-blue-900"
+                        className="w-full py-1.5 px-2 text-right bg-transparent border border-transparent hover:border-slate-300 focus:bg-white focus:border-blue-500 focus:outline-none rounded-lg font-mono text-xs sm:text-sm tabular-nums text-blue-800 font-bold"
                       />
                     </td>
 
                     {/* 5. Daily Extra */}
-                    <td className="border border-slate-300 py-1 px-1.5 text-right">
+                    <td className="border-r border-slate-200 py-1.5 px-2 text-right">
                       <input
                         type="number"
                         value={row.dailyExtra === 0 ? '' : row.dailyExtra}
                         placeholder="0"
+                        onFocus={() => setActiveCell({ dateIso: row.dateIso, field: 'dailyExtra' })}
+                        onBlur={() => setActiveCell(null)}
                         onChange={(e) => handleCellChange(row.dateIso, 'dailyExtra', e.target.value)}
-                        className="w-full py-0.5 px-1 text-right bg-transparent border-0 focus:ring-2 focus:ring-emerald-500 rounded font-mono text-[11px] tabular-nums text-slate-700"
+                        className="w-full py-1.5 px-2 text-right bg-transparent border border-transparent hover:border-slate-300 focus:bg-white focus:border-emerald-500 focus:outline-none rounded-lg font-mono text-xs sm:text-sm tabular-nums text-slate-700 font-semibold"
                       />
                     </td>
 
                     {/* 6. Daily Credit */}
-                    <td className="border border-slate-300 py-1 px-1.5 text-right">
+                    <td className="border-r border-slate-200 py-1.5 px-2 text-right">
                       <input
                         type="number"
                         value={row.dailyCredit === 0 ? '' : row.dailyCredit}
                         placeholder="0"
+                        onFocus={() => setActiveCell({ dateIso: row.dateIso, field: 'dailyCredit' })}
+                        onBlur={() => setActiveCell(null)}
                         onChange={(e) => handleCellChange(row.dateIso, 'dailyCredit', e.target.value)}
-                        className="w-full py-0.5 px-1 text-right bg-transparent border-0 focus:ring-2 focus:ring-emerald-500 rounded font-mono text-[11px] tabular-nums text-amber-800 font-semibold"
-                        title="Credit sales (Udhar given to customers) - Not added to cash"
+                        className="w-full py-1.5 px-2 text-right bg-transparent border border-transparent hover:border-slate-300 focus:bg-white focus:border-blue-500 focus:outline-none rounded-lg font-mono text-xs sm:text-sm tabular-nums text-amber-800 font-bold"
+                        title="Credit sales (Udhar given to customers)"
                       />
                     </td>
 
                     {/* 7. Daily Recovery */}
-                    <td className="border border-slate-300 py-1 px-1.5 text-right">
+                    <td className="border-r border-slate-200 py-1.5 px-2 text-right">
                       <input
                         type="number"
                         value={row.dailyRecovery === 0 ? '' : row.dailyRecovery}
                         placeholder="0"
+                        onFocus={() => setActiveCell({ dateIso: row.dateIso, field: 'dailyRecovery' })}
+                        onBlur={() => setActiveCell(null)}
                         onChange={(e) => handleCellChange(row.dateIso, 'dailyRecovery', e.target.value)}
-                        className="w-full py-0.5 px-1 text-right bg-transparent border-0 focus:ring-2 focus:ring-emerald-500 rounded font-mono text-[11px] tabular-nums text-emerald-800 font-semibold"
+                        className="w-full py-1.5 px-2 text-right bg-transparent border border-transparent hover:border-slate-300 focus:bg-white focus:border-emerald-500 focus:outline-none rounded-lg font-mono text-xs sm:text-sm tabular-nums text-emerald-700 font-bold"
                         title="Cash recovery collected against previous customer credit"
                       />
                     </td>
 
                     {/* 8. Daily Kitchen */}
-                    <td className="border border-slate-300 py-1 px-1.5 text-right">
+                    <td className="border-r border-slate-200 py-1.5 px-2 text-right">
                       <input
                         type="number"
                         value={row.dailyKitchen === 0 ? '' : row.dailyKitchen}
                         placeholder="0"
+                        onFocus={() => setActiveCell({ dateIso: row.dateIso, field: 'dailyKitchen' })}
+                        onBlur={() => setActiveCell(null)}
                         onChange={(e) => handleCellChange(row.dateIso, 'dailyKitchen', e.target.value)}
-                        className="w-full py-0.5 px-1 text-right bg-transparent border-0 focus:ring-2 focus:ring-emerald-500 rounded font-mono text-[11px] tabular-nums text-orange-900"
+                        className="w-full py-1.5 px-2 text-right bg-transparent border border-transparent hover:border-slate-300 focus:bg-white focus:border-blue-500 focus:outline-none rounded-lg font-mono text-xs sm:text-sm tabular-nums text-slate-700 font-semibold"
                       />
                     </td>
 
                     {/* 9. Daily Expenses */}
-                    <td className="border border-slate-300 py-1 px-1.5 text-right">
+                    <td className="border-r border-slate-200 py-1.5 px-2 text-right">
                       <input
                         type="number"
                         value={row.dailyExpenses === 0 ? '' : row.dailyExpenses}
                         placeholder="0"
+                        onFocus={() => setActiveCell({ dateIso: row.dateIso, field: 'dailyExpenses' })}
+                        onBlur={() => setActiveCell(null)}
                         onChange={(e) => handleCellChange(row.dateIso, 'dailyExpenses', e.target.value)}
-                        className="w-full py-0.5 px-1 text-right bg-transparent border-0 focus:ring-2 focus:ring-emerald-500 rounded font-mono text-[11px] tabular-nums text-red-700"
+                        className="w-full py-1.5 px-2 text-right bg-transparent border border-transparent hover:border-slate-300 focus:bg-white focus:border-red-400 focus:outline-none rounded-lg font-mono text-xs sm:text-sm tabular-nums text-red-700 font-bold"
                       />
                     </td>
 
-                    {/* 10. Details (e.g. "electric bill", "peshawar stok builty") */}
-                    <td className="border border-slate-300 py-1 px-1.5 text-left font-sans">
+                    {/* 10. Details */}
+                    <td className="border-r border-slate-200 py-1.5 px-2 text-left font-sans">
                       <input
                         type="text"
                         value={row.details || ''}
-                        placeholder="notes / تفصیل..."
+                        placeholder="Details / تفصیل..."
+                        onFocus={() => setActiveCell({ dateIso: row.dateIso, field: 'details' })}
+                        onBlur={() => setActiveCell(null)}
                         onChange={(e) => handleCellChange(row.dateIso, 'details', e.target.value)}
-                        className="w-full py-0.5 px-1.5 text-left bg-transparent border-0 focus:ring-2 focus:ring-emerald-500 rounded text-[11px] text-slate-800"
+                        className="w-full py-1.5 px-2.5 text-left bg-transparent border border-transparent hover:border-slate-300 focus:bg-white focus:border-blue-500 focus:outline-none rounded-lg text-xs sm:text-sm text-slate-800"
                       />
                     </td>
 
-                    {/* 11. Closing Cash (Auto-calculated via formula) */}
-                    <td className="border border-slate-300 py-1.5 px-2.5 text-right font-black font-mono text-emerald-950 bg-emerald-50/50 tabular-nums">
-                      {row.closingCash.toFixed(0)}
+                    {/* 11. Closing / Remaining Cash */}
+                    <td className="py-2.5 px-3.5 text-right font-black font-mono text-sm sm:text-base text-blue-950 bg-blue-50/70 tabular-nums">
+                      {row.closingCash.toLocaleString('en-PK')}
                     </td>
                   </tr>
                 );
               })}
             </tbody>
 
-            {/* 3. TOTAL ROW MATCHING SCREENSHOT'S PURPLE/BLUE BACKGROUND */}
-            <tfoot className="sticky bottom-0 z-20 bg-[#3730a3] text-white font-mono font-black text-xs border-t-2 border-indigo-400 select-none">
+            {/* TOTAL FOOTER IN DEEP BLUE & EMERALD */}
+            <tfoot className="sticky bottom-0 z-20 bg-[#1e3a8a] text-white font-mono font-black text-xs sm:text-sm border-t-2 border-emerald-400 select-none">
               <tr>
-                <td className="border border-indigo-400 py-2.5 px-2 text-center bg-[#312e81]">
+                <td className="border-r border-blue-700 py-3 px-2.5 text-center bg-[#172554]">
                   Σ
                 </td>
-                <td className="border border-indigo-400 py-2.5 px-3 uppercase tracking-wider text-amber-200">
+                <td className="border-r border-blue-700 py-3 px-3.5 text-right tabular-nums text-blue-100" title="Initial Month Opening Cash">
+                  {totals.firstOpening.toLocaleString('en-PK')}
+                </td>
+                <td className="border-r border-blue-700 py-3 px-3.5 text-center uppercase tracking-wider text-emerald-300">
                   TOTAL
                 </td>
-                <td className="border border-indigo-400 py-2.5 px-3 text-right tabular-nums text-indigo-100" title="Initial Month Opening Cash">
-                  {totals.firstOpening.toFixed(0)}
+                <td className="border-r border-blue-700 py-3 px-3.5 text-right tabular-nums text-emerald-200">
+                  {totals.totalSale.toLocaleString('en-PK')}
                 </td>
-                <td className="border border-indigo-400 py-2.5 px-3 text-right tabular-nums text-white">
-                  {totals.totalSale.toFixed(0)}
+                <td className="border-r border-blue-700 py-3 px-3.5 text-right tabular-nums text-blue-100">
+                  {totals.totalPurchase.toLocaleString('en-PK')}
                 </td>
-                <td className="border border-indigo-400 py-2.5 px-3 text-right tabular-nums text-indigo-100">
-                  {totals.totalPurchase.toFixed(0)}
+                <td className="border-r border-blue-700 py-3 px-3.5 text-right tabular-nums text-blue-100">
+                  {totals.totalExtra.toLocaleString('en-PK')}
                 </td>
-                <td className="border border-indigo-400 py-2.5 px-3 text-right tabular-nums text-indigo-100">
-                  {totals.totalExtra.toFixed(0)}
+                <td className="border-r border-blue-700 py-3 px-3.5 text-right tabular-nums text-amber-300">
+                  {totals.totalCredit.toLocaleString('en-PK')}
                 </td>
-                <td className="border border-indigo-400 py-2.5 px-3 text-right tabular-nums text-amber-300">
-                  {totals.totalCredit.toFixed(0)}
+                <td className="border-r border-blue-700 py-3 px-3.5 text-right tabular-nums text-emerald-300">
+                  {totals.totalRecovery.toLocaleString('en-PK')}
                 </td>
-                <td className="border border-indigo-400 py-2.5 px-3 text-right tabular-nums text-emerald-300">
-                  {totals.totalRecovery.toFixed(0)}
+                <td className="border-r border-blue-700 py-3 px-3.5 text-right tabular-nums text-blue-100">
+                  {totals.totalKitchen.toLocaleString('en-PK')}
                 </td>
-                <td className="border border-indigo-400 py-2.5 px-3 text-right tabular-nums text-indigo-100">
-                  {totals.totalKitchen.toFixed(0)}
+                <td className="border-r border-blue-700 py-3 px-3.5 text-right tabular-nums text-red-300">
+                  {totals.totalExpenses.toLocaleString('en-PK')}
                 </td>
-                <td className="border border-indigo-400 py-2.5 px-3 text-right tabular-nums text-red-300">
-                  {totals.totalExpenses.toFixed(0)}
+                <td className="border-r border-blue-700 py-3 px-3.5 text-left font-sans text-xs text-blue-200">
+                  Net Period Closing
                 </td>
-                <td className="border border-indigo-400 py-2.5 px-3 text-left font-sans text-[11px] text-indigo-200">
-                  Net Period Flow
-                </td>
-                <td className="border border-indigo-400 py-2.5 px-3 text-right tabular-nums text-emerald-200 text-sm">
-                  {totals.finalClosing.toFixed(0)}
+                <td className="py-3 px-3.5 text-right tabular-nums text-emerald-300 text-sm sm:text-base bg-emerald-900/60">
+                  Rs. {totals.finalClosing.toLocaleString('en-PK')}
                 </td>
               </tr>
             </tfoot>
           </table>
         </div>
 
-        {/* BOTTOM EXCEL STATUS STRIP MATCHING SCREENSHOT BOTTOM TABS */}
-        <div className="bg-[#e2e8f0] px-3 py-2 border-t border-slate-300 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-700">
+        {/* BOTTOM STATUS STRIP */}
+        <div className="bg-slate-100 px-4 py-2.5 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm text-slate-700">
           <div className="flex items-center gap-2 overflow-x-auto py-0.5">
-            <span className="font-bold text-slate-500 uppercase text-[10px]">Workbook Sheets:</span>
-            <span className="bg-white px-2.5 py-0.5 rounded shadow-xs font-bold text-emerald-800 border border-slate-300">
+            <span className="font-bold text-slate-500 uppercase text-[11px]">Sheets:</span>
+            <span className="bg-white px-3 py-1 rounded-lg shadow-2xs font-bold text-emerald-800 border border-slate-200">
               Daily Hisab ({activeMonthName})
             </span>
             {onNavigateToLedgers && (
               <button
                 type="button"
                 onClick={onNavigateToLedgers}
-                className="bg-slate-200 hover:bg-slate-300 px-2.5 py-0.5 rounded font-medium text-slate-700 cursor-pointer"
+                className="bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-lg font-bold text-blue-800 border border-blue-200 cursor-pointer"
               >
                 Customer Udhar Ledgers
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-4 text-xs font-bold">
-            <span>Month Initial: <strong className="font-mono text-slate-900">{totals.firstOpening.toFixed(0)}</strong></span>
+          <div className="flex flex-wrap items-center gap-4 text-xs sm:text-sm font-bold">
+            <span>Opening: <strong className="font-mono text-slate-900">Rs. {totals.firstOpening.toLocaleString('en-PK')}</strong></span>
             <span>·</span>
-            <span>Total Sales: <strong className="font-mono text-emerald-800">{totals.totalSale.toFixed(0)}</strong></span>
+            <span>Sales: <strong className="font-mono text-emerald-700">Rs. {totals.totalSale.toLocaleString('en-PK')}</strong></span>
             <span>·</span>
-            <span>Total Purchases: <strong className="font-mono text-blue-900">{totals.totalPurchase.toFixed(0)}</strong></span>
+            <span>Purchases: <strong className="font-mono text-blue-800">Rs. {totals.totalPurchase.toLocaleString('en-PK')}</strong></span>
             <span>·</span>
-            <span>Final Closing: <strong className="font-mono text-emerald-700">{totals.finalClosing.toFixed(0)}</strong></span>
+            <span>Closing Cash: <strong className="font-mono text-emerald-800">Rs. {totals.finalClosing.toLocaleString('en-PK')}</strong></span>
           </div>
         </div>
       </div>

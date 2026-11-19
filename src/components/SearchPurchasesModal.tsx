@@ -222,6 +222,12 @@ export const SearchPurchasesModal: React.FC<SearchPurchasesModalProps> = ({
                           Edited
                         </span>
                       )}
+                      {(purchase.hasNegativeAdjustment ||
+                        purchase.items?.some((it) => it.quantity < 0)) && (
+                        <span className="text-[10px] font-black bg-red-100 text-red-700 px-2 py-0.5 rounded-full border border-red-200">
+                          Stock Deduct (−Qty)
+                        </span>
+                      )}
                       <span className="text-xs text-slate-400 flex items-center gap-1 font-medium">
                         <Calendar className="w-3.5 h-3.5" />
                         {purchase.purchaseDate}

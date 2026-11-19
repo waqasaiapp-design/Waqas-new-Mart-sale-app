@@ -28,16 +28,18 @@ import {
   Package,
   AlertTriangle,
 } from 'lucide-react';
-import { SaleTransaction, SaleReturn, Product, PurchaseTransaction } from '../types/pos';
+import { SaleTransaction, SaleReturn, Product, PurchaseTransaction, StoreBranding } from '../types/pos';
 import { formatRs } from '../data/defaultProducts';
 import { WaqasBrandingCard } from './WaqasBrandingCard';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
+import { printSalesProfitReport, printStockReport } from '../utils/printerService';
 
 interface SaleSummaryPageProps {
   transactions: SaleTransaction[];
   saleReturns?: SaleReturn[];
   products?: Product[];
   purchases?: PurchaseTransaction[];
+  branding?: StoreBranding;
   onSelectInvoiceToPrint: (transaction: SaleTransaction) => void;
   onNavigate: (page: string) => void;
   activeNav?: string;
@@ -60,6 +62,7 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
   saleReturns = [],
   products = [],
   purchases = [],
+  branding,
   onSelectInvoiceToPrint,
   onNavigate,
   activeNav = 'Daily Hisab',
@@ -81,6 +84,8 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [paymentFilter, setPaymentFilter] = useState<'All' | 'Cash' | 'Card' | 'Digital' | 'Credit'>('All');
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printFeedback, setPrintFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Selected row for "Print Invoice"
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
@@ -417,9 +422,63 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  // Print Report Handler
-  const handlePrintReport = () => {
-    window.print();
+  // Print Report Handler (Sales/Purchase/Profit OR Inventory Stock depending on tab)
+  const handlePrintReport = async () => {
+    setIsPrinting(true);
+    setPrintFeedback(null);
+
+    if (activeReportTab === 'inventory_stock') {
+      const targetProducts = filteredStockReportItems.map((item) => item.product);
+      const label = negativeStockOnlyFilter ? 'Negative Stock Only' : 'Inventory & Stock Report';
+      const res = await printStockReport(targetProducts, label, branding);
+      setPrintFeedback({ ok: res.ok, text: res.message });
+      setIsPrinting(false);
+      return;
+    }
+
+    let totalCogs = 0;
+    filteredTransactions.forEach((tx) => {
+      tx.items?.forEach((it) => {
+        const unitCost = Number(it.product?.costPrice) || 0;
+        totalCogs += unitCost * (Number(it.quantity) || 0);
+      });
+    });
+
+    const filteredPurchases = purchases.filter((p) => {
+      if (!p.purchaseDate) return true;
+      const iso = p.purchaseDate.includes('/')
+        ? (() => {
+            const pts = p.purchaseDate.split('/');
+            return pts.length === 3 ? `${pts[2]}-${pts[1].padStart(2, '0')}-${pts[0].padStart(2, '0')}` : p.purchaseDate;
+          })()
+        : p.purchaseDate;
+      if (fromDate && iso < fromDate) return false;
+      if (toDate && iso > toDate) return false;
+      return true;
+    });
+
+    const totalPurchaseSpend = filteredPurchases.reduce((s, p) => s + (Number(p.grandTotal) || 0), 0);
+    const grossProfit = summaryCalculations.grossSales - totalCogs;
+    const netProfit = summaryCalculations.netSales - totalCogs;
+
+    const res = await printSalesProfitReport(
+      {
+        reportTitle: `Sales, Purchase & Profit Report (${activeQuickFilter})`,
+        dateLabel: `${fromDate} to ${toDate}`,
+        totalRevenue: summaryCalculations.netSales,
+        totalCogs,
+        grossProfit,
+        netProfit,
+        totalRefunds: summaryCalculations.totalReturns,
+        totalPurchaseSpend,
+        transactions: filteredTransactions,
+        purchases: filteredPurchases,
+      },
+      branding
+    );
+
+    setPrintFeedback({ ok: res.ok, text: res.message });
+    setIsPrinting(false);
   };
 
   // Print Specific Invoice
@@ -450,11 +509,13 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
         actions={
           <div className="flex items-center gap-2">
             <button
-              onClick={() => window.print()}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+              type="button"
+              onClick={handlePrintReport}
+              disabled={isPrinting}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Print Report</span>
+              <span>{isPrinting ? 'Printing...' : 'Print Report'}</span>
             </button>
             <button
               onClick={handleExportExcel}
@@ -468,6 +529,19 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
       />
 
       <div className="flex-1 min-h-0 flex flex-col p-3 sm:p-5 lg:p-6 w-full space-y-4 overflow-y-auto">
+        {printFeedback && (
+          <div
+            className={`px-4 py-2.5 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 ${
+              printFeedback.ok
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-red-50 border-red-200 text-red-700'
+            }`}
+          >
+            <span>{printFeedback.text}</span>
+            <button type="button" onClick={() => setPrintFeedback(null)} className="font-black cursor-pointer">×</button>
+          </div>
+        )}
+
         {inlineNotice && (
           <div className="px-4 py-2.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-bold flex items-center justify-between shadow-xs">
             <span>{inlineNotice}</span>
@@ -1284,7 +1358,17 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
               />
             </div>
 
-            <div className="flex items-center gap-2.5 w-full sm:w-auto">
+            <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={handlePrintReport}
+                disabled={isPrinting}
+                className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-black bg-[#0284c7] hover:bg-[#0369a1] disabled:opacity-60 text-white shadow-xs transition-all cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>{isPrinting ? 'Printing...' : 'Print Stock Report'}</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setNegativeStockOnlyFilter(!negativeStockOnlyFilter)}

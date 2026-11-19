@@ -24,12 +24,24 @@ import {
   UserRole,
   AuditLogEntry,
   DefaultSubscriptionPricing,
+  StockTransaction,
+  StockTransactionType,
+  PurchaseReturn,
+  ExpenseEntry,
+  StaffMember,
+  SupplierLedgerEntry,
+  PrinterSettings,
 } from './src/types/pos';
 import {
   SCREENSHOT_CATEGORIES,
   INITIAL_SUPPLIERS,
   SEED_CATALOG_PRODUCTS,
 } from './src/data/defaultProducts';
+import {
+  applyPurchaseDeleteToState,
+  applyPurchaseSaveToState,
+  formatStockAuditTimestamp,
+} from './src/utils/purchaseHelpers';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -351,28 +363,31 @@ interface StoreData {
   heldBills: HeldBill[];
   branding: StoreBranding;
   userProfile: UserProfile;
+  stockHistory?: StockTransaction[];
+  purchaseReturns?: PurchaseReturn[];
+  supplierLedgers?: SupplierLedgerEntry[];
+  expenses?: ExpenseEntry[];
+  staffList?: StaffMember[];
+  printerSettings?: PrinterSettings;
 }
 
-function loadInitialStoreData(): StoreData {
-  if (fs.existsSync(STORE_DB_FILE)) {
-    try {
-      const content = fs.readFileSync(STORE_DB_FILE, 'utf-8');
-      return JSON.parse(content);
-    } catch (e) {
-      console.warn('Failed to parse store_db.json, using defaults', e);
-    }
-  }
-
-  const defaultData: StoreData = {
-    products: [],
-    transactions: [],
-    purchases: [],
-    customers: [],
-    customerLedgers: [],
-    saleReturns: [],
-    suppliers: INITIAL_SUPPLIERS,
-    heldBills: [],
-    branding: {
+function normalizeStoreData(raw: Partial<StoreData>): StoreData {
+  return {
+    products: Array.isArray(raw.products) ? raw.products : [],
+    transactions: Array.isArray(raw.transactions) ? raw.transactions : [],
+    purchases: Array.isArray(raw.purchases) ? raw.purchases : [],
+    customers: Array.isArray(raw.customers) ? raw.customers : [],
+    customerLedgers: Array.isArray(raw.customerLedgers) ? raw.customerLedgers : [],
+    saleReturns: Array.isArray(raw.saleReturns) ? raw.saleReturns : [],
+    suppliers: Array.isArray(raw.suppliers) && raw.suppliers.length > 0 ? raw.suppliers : INITIAL_SUPPLIERS,
+    heldBills: Array.isArray(raw.heldBills) ? raw.heldBills : [],
+    stockHistory: Array.isArray(raw.stockHistory) ? raw.stockHistory : [],
+    purchaseReturns: Array.isArray(raw.purchaseReturns) ? raw.purchaseReturns : [],
+    supplierLedgers: Array.isArray(raw.supplierLedgers) ? raw.supplierLedgers : [],
+    expenses: Array.isArray(raw.expenses) ? raw.expenses : [],
+    staffList: Array.isArray(raw.staffList) ? raw.staffList : [],
+    printerSettings: raw.printerSettings,
+    branding: raw.branding || {
       storeName: 'WAQAS MART',
       primaryName: 'WAQAS',
       accentName: 'MART',
@@ -384,7 +399,7 @@ function loadInitialStoreData(): StoreData {
       bottomBannerSubtitle: 'Best Quality • Lowest Prices',
       terminalDeviceId: 'WM-001',
     },
-    userProfile: {
+    userProfile: raw.userProfile || {
       id: 'USR-MASTER-OWNER',
       displayName: 'Waqas Ahmad',
       email: 'muhammedsaad255251@gmail.com',
@@ -393,6 +408,19 @@ function loadInitialStoreData(): StoreData {
       createdAt: new Date().toLocaleDateString('en-GB'),
     },
   };
+}
+
+function loadInitialStoreData(): StoreData {
+  if (fs.existsSync(STORE_DB_FILE)) {
+    try {
+      const content = fs.readFileSync(STORE_DB_FILE, 'utf-8');
+      return normalizeStoreData(JSON.parse(content));
+    } catch (e) {
+      console.warn('Failed to parse store_db.json, using defaults', e);
+    }
+  }
+
+  const defaultData: StoreData = normalizeStoreData({});
 
   try {
     fs.writeFileSync(STORE_DB_FILE, JSON.stringify(defaultData, null, 2));
@@ -509,10 +537,47 @@ const pairingSessions = new Map<string, PairingSession>();
 
 function persistStore() {
   try {
-    fs.writeFileSync(STORE_DB_FILE, JSON.stringify(storeDb, null, 2));
+    const serialized = JSON.stringify(storeDb, null, 2);
+    fs.writeFileSync(STORE_DB_FILE, serialized);
+    const defaultShopFile = getShopStoreFile('SHOP-WM-001');
+    if (fs.existsSync(defaultShopFile)) {
+      fs.writeFileSync(defaultShopFile, serialized);
+    }
   } catch (e) {
     console.error('Error persisting store_db.json', e);
   }
+}
+
+function recordServerStockTx(
+  product: Product,
+  previousStock: number,
+  quantityChange: number,
+  newStock: number,
+  transactionType: StockTransactionType,
+  invoiceNumber: string,
+  notes?: string
+) {
+  const entry: StockTransaction = {
+    id: `STK-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    productId: product.id,
+    productName: product.name,
+    barcode: product.barcode,
+    previousStock,
+    quantityChange,
+    newStock,
+    transactionType,
+    invoiceNumber,
+    dateTime: new Date().toLocaleString('en-PK', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    }),
+    notes,
+  };
+  storeDb.stockHistory = [entry, ...(storeDb.stockHistory || [])].slice(0, 5000);
 }
 
 function persistDevices() {
@@ -1122,15 +1187,45 @@ async function start() {
         // Idempotency check: if transaction exists, do not duplicate
         const exists = storeDb.transactions.some((t) => t.invoiceNumber === tx.invoiceNumber);
         if (!exists) {
+          // Stock protection: normal sales must NEVER exceed available stock
+          if (tx.mode === 'sale') {
+            for (const item of tx.items || []) {
+              const product = storeDb.products.find((p) => p.id === item.product.id);
+              if (product) {
+                const avail = Number(product.stock) || 0;
+                const reqQty = Number(item.quantity) || 0;
+                if (reqQty > avail) {
+                  return res.status(400).json({
+                    success: false,
+                    error: 'INSUFFICIENT_STOCK',
+                    message: `Insufficient stock for "${product.name}". Available: ${avail}, Requested: ${reqQty}`,
+                  });
+                }
+              }
+            }
+          }
+
           storeDb.transactions.unshift(tx);
 
-          // Server-authoritative stock deduction (Negative Stock Management: allows stock to go below zero)
-          tx.items.forEach((item) => {
-            const product = storeDb.products.find((p) => p.id === item.product.id);
-            if (product) {
-              product.stock = (Number(product.stock) || 0) - item.quantity;
-            }
-          });
+          // Server-authoritative stock deduction & Stock Transaction History
+          if (tx.mode === 'sale') {
+            tx.items.forEach((item) => {
+              const product = storeDb.products.find((p) => p.id === item.product.id);
+              if (product) {
+                const prevStock = Number(product.stock) || 0;
+                const nextStock = prevStock - item.quantity;
+                product.stock = nextStock;
+                recordServerStockTx(
+                  product,
+                  prevStock,
+                  -item.quantity,
+                  nextStock,
+                  'Sale',
+                  tx.invoiceNumber
+                );
+              }
+            });
+          }
 
           // If credit sale with customer, record ledger
           if (tx.paymentMethod === 'credit' && (tx.customerId || tx.customerName)) {
@@ -1151,7 +1246,6 @@ async function start() {
 
           persistStore();
 
-          // Broadcast to all other devices!
           broadcastSyncEvent({
             type: 'sale:completed',
             sourceDeviceId,
@@ -1160,6 +1254,7 @@ async function start() {
               transaction: tx,
               updatedProducts: storeDb.products,
               customerLedgers: storeDb.customerLedgers,
+              stockHistory: storeDb.stockHistory,
             },
           });
         }
@@ -1173,18 +1268,21 @@ async function start() {
           return res.status(400).json({ success: false, message: 'Invalid purchase payload.' });
         }
 
-        const exists = storeDb.purchases.some((p) => p.purchaseInvoiceNo === purchase.purchaseInvoiceNo);
-        if (!exists) {
-          storeDb.purchases.unshift(purchase);
+        const reconciled = applyPurchaseSaveToState({
+          purchase,
+          isEdit: false,
+          products: storeDb.products,
+          suppliers: storeDb.suppliers,
+          purchases: storeDb.purchases,
+          userName: purchase.userName || 'Admin',
+          timestampStr: formatStockAuditTimestamp(),
+        });
 
-          // Restock inventory
-          purchase.items.forEach((item) => {
-            const product = storeDb.products.find((p) => p.id === item.productId);
-            if (product) {
-              product.stock = (Number(product.stock) || 0) + item.quantity;
-              product.costPrice = item.purchaseCost;
-            }
-          });
+        if (!reconciled.duplicateBlocked) {
+          storeDb.products = reconciled.products;
+          storeDb.suppliers = reconciled.suppliers;
+          storeDb.purchases = reconciled.purchases;
+          storeDb.stockHistory = [...reconciled.stockEntries, ...(storeDb.stockHistory || [])].slice(0, 5000);
 
           persistStore();
 
@@ -1195,10 +1293,90 @@ async function start() {
             payload: {
               purchase,
               updatedProducts: storeDb.products,
+              stockHistory: storeDb.stockHistory,
             },
           });
         }
 
+        return res.json({ success: true, store: storeDb });
+      }
+
+      case 'update_purchase': {
+        const purchase: PurchaseTransaction = payload;
+        if (!purchase || !purchase.id) {
+          return res.status(400).json({ success: false, message: 'Invalid purchase update payload.' });
+        }
+
+        const existingOnServer = storeDb.purchases.some(
+          (p) => p.id === purchase.id || p.purchaseInvoiceNo === purchase.purchaseInvoiceNo
+        );
+
+        const reconciled = applyPurchaseSaveToState({
+          purchase,
+          isEdit: existingOnServer,
+          products: storeDb.products,
+          suppliers: storeDb.suppliers,
+          purchases: storeDb.purchases,
+          userName: purchase.editBy || purchase.userName || 'Admin',
+          timestampStr: formatStockAuditTimestamp(),
+        });
+
+        if (!reconciled.duplicateBlocked) {
+          storeDb.products = reconciled.products;
+          storeDb.suppliers = reconciled.suppliers;
+          storeDb.purchases = reconciled.purchases;
+          storeDb.stockHistory = [...reconciled.stockEntries, ...(storeDb.stockHistory || [])].slice(0, 5000);
+        }
+
+        persistStore();
+
+        broadcastSyncEvent({
+          type: 'purchase:updated',
+          sourceDeviceId,
+          timestamp: Date.now(),
+          payload: {
+            purchase,
+            updatedProducts: storeDb.products,
+            stockHistory: storeDb.stockHistory,
+          },
+        });
+
+        return res.json({ success: true, store: storeDb });
+      }
+
+      case 'delete_purchase': {
+        const { purchaseId } = payload || {};
+        if (!purchaseId) {
+          return res.status(400).json({ success: false, message: 'purchaseId is required.' });
+        }
+
+        const reversed = applyPurchaseDeleteToState({
+          purchaseId,
+          products: storeDb.products,
+          suppliers: storeDb.suppliers,
+          purchases: storeDb.purchases,
+          userName: 'Admin',
+          timestampStr: formatStockAuditTimestamp(),
+        });
+
+        if (reversed.deletedPurchase) {
+          storeDb.products = reversed.products;
+          storeDb.suppliers = reversed.suppliers;
+          storeDb.purchases = reversed.purchases;
+          storeDb.stockHistory = [...reversed.stockEntries, ...(storeDb.stockHistory || [])].slice(0, 5000);
+          persistStore();
+
+          broadcastSyncEvent({
+            type: 'purchase:deleted',
+            sourceDeviceId,
+            timestamp: Date.now(),
+            payload: {
+              purchaseId: reversed.deletedPurchase.id,
+              updatedProducts: storeDb.products,
+              stockHistory: storeDb.stockHistory,
+            },
+          });
+        }
         return res.json({ success: true, store: storeDb });
       }
 
@@ -1212,17 +1390,25 @@ async function start() {
         if (!exists) {
           storeDb.saleReturns.unshift(ret);
 
-          // Restock resaleable items
           ret.items.forEach((item) => {
             if (item.condition === 'resaleable') {
               const product = storeDb.products.find((p) => p.id === item.productId);
               if (product) {
-                product.stock = (Number(product.stock) || 0) + item.quantity;
+                const prevStock = Number(product.stock) || 0;
+                const nextStock = prevStock + item.quantity;
+                product.stock = nextStock;
+                recordServerStockTx(
+                  product,
+                  prevStock,
+                  item.quantity,
+                  nextStock,
+                  'Sale Return',
+                  ret.returnNumber
+                );
               }
             }
           });
 
-          // Customer balance credit adjustment if applicable
           if (ret.refundMethod === 'credit' && ret.customerId) {
             const entry: CustomerLedgerEntry = {
               id: `LED-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -1249,10 +1435,98 @@ async function start() {
               saleReturn: ret,
               updatedProducts: storeDb.products,
               customerLedgers: storeDb.customerLedgers,
+              stockHistory: storeDb.stockHistory,
             },
           });
         }
 
+        return res.json({ success: true, store: storeDb });
+      }
+
+      case 'create_purchase_return': {
+        const ret: PurchaseReturn = payload;
+        if (!ret || !ret.returnNumber) {
+          return res.status(400).json({ success: false, message: 'Invalid purchase return payload.' });
+        }
+        storeDb.purchaseReturns = storeDb.purchaseReturns || [];
+        const exists = storeDb.purchaseReturns.some((r) => r.returnNumber === ret.returnNumber);
+        if (!exists) {
+          storeDb.purchaseReturns.unshift(ret);
+          ret.items.forEach((item) => {
+            const product = storeDb.products.find((p) => p.id === item.productId);
+            if (product) {
+              const prevStock = Number(product.stock) || 0;
+              const nextStock = Math.max(0, prevStock - item.quantity);
+              product.stock = nextStock;
+              recordServerStockTx(
+                product,
+                prevStock,
+                -item.quantity,
+                nextStock,
+                'Purchase Return',
+                ret.returnNumber
+              );
+            }
+          });
+          if (ret.refundType === 'reduce_payable' && ret.supplierId) {
+            const supplier = storeDb.suppliers.find((s) => s.id === ret.supplierId);
+            if (supplier) {
+              supplier.payableBalance = Math.max(0, (Number(supplier.payableBalance) || 0) - ret.totalRefund);
+            }
+          }
+          persistStore();
+
+          broadcastSyncEvent({
+            type: 'purchase_return:processed',
+            sourceDeviceId,
+            timestamp: Date.now(),
+            payload: {
+              purchaseReturn: ret,
+              updatedProducts: storeDb.products,
+              stockHistory: storeDb.stockHistory,
+            },
+          });
+        }
+        return res.json({ success: true, store: storeDb });
+      }
+
+      case 'sync_staff': {
+        if (Array.isArray(payload)) {
+          storeDb.staffList = payload;
+          persistStore();
+        }
+        return res.json({ success: true, store: storeDb });
+      }
+
+      case 'sync_expenses': {
+        if (Array.isArray(payload)) {
+          storeDb.expenses = payload;
+          persistStore();
+        }
+        return res.json({ success: true, store: storeDb });
+      }
+
+      case 'sync_supplier_ledgers': {
+        const { suppliers: supList, ledgerEntries } = payload || {};
+        if (Array.isArray(supList)) storeDb.suppliers = supList;
+        if (Array.isArray(ledgerEntries)) storeDb.supplierLedgers = ledgerEntries;
+        persistStore();
+        return res.json({ success: true, store: storeDb });
+      }
+
+      case 'sync_printer_settings': {
+        if (payload) {
+          storeDb.printerSettings = payload;
+          persistStore();
+        }
+        return res.json({ success: true, store: storeDb });
+      }
+
+      case 'sync_stock_history': {
+        if (Array.isArray(payload)) {
+          storeDb.stockHistory = payload;
+          persistStore();
+        }
         return res.json({ success: true, store: storeDb });
       }
 

@@ -22,16 +22,22 @@ import {
   PurchaseTransaction,
   Supplier,
   Product,
+  StoreBranding,
 } from '../types/pos';
 import { formatRs } from '../data/defaultProducts';
 import { WaqasDualProfileCards } from './WaqasDualProfileCards';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
+import {
+  printPurchaseReturnReceipt,
+  printPurchaseReturnsSummaryReport,
+} from '../utils/printerService';
 
 interface PurchaseReturnsPageProps {
   purchaseReturns: PurchaseReturn[];
   purchases: PurchaseTransaction[];
   suppliers: Supplier[];
   products: Product[];
+  branding?: StoreBranding;
   onSavePurchaseReturn: (ret: PurchaseReturn) => void;
   onDeletePurchaseReturn: (returnId: string) => void;
   onDeleteAllReturns?: () => void;
@@ -43,6 +49,7 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
   purchases,
   suppliers,
   products,
+  branding,
   onSavePurchaseReturn,
   onDeletePurchaseReturn,
   onDeleteAllReturns,
@@ -51,6 +58,8 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewReturnModalOpen, setIsNewReturnModalOpen] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printFeedback, setPrintFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Return Creation Form State
   const [selectedPurchaseId, setSelectedPurchaseId] = useState<string>('');
@@ -161,6 +170,22 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
     );
   }, [purchaseReturns, searchQuery]);
 
+  const handlePrintReturnsSummary = async () => {
+    setIsPrinting(true);
+    setPrintFeedback(null);
+    const res = await printPurchaseReturnsSummaryReport(filteredReturns, branding);
+    setPrintFeedback({ ok: res.ok, text: res.message });
+    setIsPrinting(false);
+  };
+
+  const handlePrintSingleReturn = async (ret: PurchaseReturn) => {
+    setIsPrinting(true);
+    setPrintFeedback(null);
+    const res = await printPurchaseReturnReceipt(ret, branding);
+    setPrintFeedback({ ok: res.ok, text: res.message });
+    setIsPrinting(false);
+  };
+
   return (
     <div className="flex-1 min-h-full w-full bg-[#f8fafc] text-slate-900 flex flex-col font-sans">
       <FullScreenPageHeader
@@ -172,11 +197,13 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
         actions={
           <div className="flex items-center gap-2">
             <button
-              onClick={() => window.print()}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+              type="button"
+              onClick={handlePrintReturnsSummary}
+              disabled={isPrinting}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Print Returns</span>
+              <span>{isPrinting ? 'Printing...' : 'Print Returns'}</span>
             </button>
             <button
               onClick={handleOpenNewReturn}
@@ -195,6 +222,19 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
       />
 
       <div className="flex-1 min-h-0 flex flex-col p-3 sm:p-5 lg:p-6 w-full space-y-4 overflow-y-auto">
+        {printFeedback && (
+          <div
+            className={`px-4 py-2.5 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 ${
+              printFeedback.ok
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-red-50 border-red-200 text-red-700'
+            }`}
+          >
+            <span>{printFeedback.text}</span>
+            <button type="button" onClick={() => setPrintFeedback(null)} className="font-black cursor-pointer">×</button>
+          </div>
+        )}
+
         {/* Toast Feedback */}
         {feedbackMsg && (
           <div className="fixed top-4 right-4 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-bold animate-in fade-in">
@@ -226,11 +266,13 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => window.print()}
-            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+            type="button"
+            onClick={handlePrintReturnsSummary}
+            disabled={isPrinting}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <Printer className="w-4 h-4" />
-            <span>Print Returns</span>
+            <span>{isPrinting ? 'Printing...' : 'Print Returns'}</span>
           </button>
 
           <button
@@ -372,17 +414,29 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
                       Rs. {ret.totalRefund.toFixed(0)}
                     </td>
                     <td className="py-3 px-3 text-center">
-                      <button
-                        onClick={() => {
-                          if (window.confirm('Delete this purchase return record?')) {
-                            onDeletePurchaseReturn(ret.id);
-                          }
-                        }}
-                        className="p-1.5 text-slate-400 hover:text-red-600 rounded transition-colors"
-                        title="Delete Return"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handlePrintSingleReturn(ret)}
+                          disabled={isPrinting}
+                          className="p-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg transition-colors cursor-pointer"
+                          title="Print Return Receipt"
+                        >
+                          <Printer className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm('Delete this purchase return record?')) {
+                              onDeletePurchaseReturn(ret.id);
+                            }
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-red-600 rounded transition-colors cursor-pointer"
+                          title="Delete Return"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

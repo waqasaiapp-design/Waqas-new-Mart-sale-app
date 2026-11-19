@@ -28,14 +28,19 @@ import {
   FileSpreadsheet,
   X,
 } from 'lucide-react';
-import { Customer, CustomerLedgerEntry } from '../types/pos';
+import { Customer, CustomerLedgerEntry, StoreBranding } from '../types/pos';
 import { formatRs } from '../data/defaultProducts';
 import { WaqasBrandingCard } from './WaqasBrandingCard';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
+import {
+  printAllCustomersLedgerSummary,
+  printCustomerLedgerReport,
+} from '../utils/printerService';
 
 interface CustomerLedgersPageProps {
   customers: Customer[];
   ledgerEntries: CustomerLedgerEntry[];
+  branding?: StoreBranding;
   onSaveCustomer: (customer: Customer) => void;
   onDeleteCustomer: (customerId: string) => void;
   onSaveLedgerEntry: (entry: CustomerLedgerEntry) => void;
@@ -50,6 +55,7 @@ interface CustomerLedgersPageProps {
 export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
   customers,
   ledgerEntries,
+  branding,
   onSaveCustomer,
   onDeleteCustomer,
   onSaveLedgerEntry,
@@ -94,8 +100,10 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
   const [entryAmount, setEntryAmount] = useState<number | ''>('');
   const [entryPaymentMethod, setEntryPaymentMethod] = useState('Cash');
 
-  // Success Feedback
+  // Success Feedback & Printing State
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printFeedback, setPrintFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   const showToast = (msg: string) => {
     setFeedbackMsg(msg);
@@ -376,307 +384,29 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
     document.body.removeChild(link);
   };
 
-  // Helper to print isolated HTML via iframe without window clipping
-  const printHtmlViaIframe = (htmlContent: string) => {
-    try {
-      const printFrame = document.createElement('iframe');
-      printFrame.style.position = 'fixed';
-      printFrame.style.right = '0';
-      printFrame.style.bottom = '0';
-      printFrame.style.width = '0';
-      printFrame.style.height = '0';
-      printFrame.style.border = '0';
-      document.body.appendChild(printFrame);
-
-      const frameDoc = printFrame.contentWindow?.document || printFrame.contentDocument;
-      if (frameDoc) {
-        frameDoc.open();
-        frameDoc.write(htmlContent);
-        frameDoc.close();
-        setTimeout(() => {
-          printFrame.contentWindow?.focus();
-          printFrame.contentWindow?.print();
-          setTimeout(() => {
-            if (document.body.contains(printFrame)) {
-              document.body.removeChild(printFrame);
-            }
-          }, 4000);
-        }, 500);
-      }
-    } catch (err) {
-      console.error('Print iframe error:', err);
-      window.print();
-    }
-  };
-
   // 1. PRINT INDIVIDUAL CUSTOMER DETAIL UDHAR BILL / STATEMENT
-  const handlePrintCustomerBill = (targetCust?: Customer | null) => {
+  const handlePrintCustomerBill = async (targetCust?: Customer | null) => {
     const custBase = targetCust || activeCustomer;
     if (!custBase) return;
 
-    const cust = customersWithStats.find((c) => c.id === custBase.id) || {
-      ...custBase,
-      totalCredit: 0,
-      totalDebit: 0,
-      currentBalance: Number(custBase.previousBalance) || 0,
-      entriesCount: 0,
-      lastDate: '',
-    };
+    const cEntries = ledgerEntries
+      .filter((e) => e.customerId === custBase.id)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    const cEntries = ledgerEntries.filter((e) => e.customerId === cust.id);
-    let runBal = Number(cust.previousBalance) || 0;
-    const computedEntries = cEntries.map((e) => {
-      runBal = runBal + (Number(e.credit) || 0) - (Number(e.debit) || 0);
-      return { ...e, calculatedRunningBalance: runBal };
-    });
-
-    const rowsHtml = [
-      `
-      <tr style="background:#f1f5f9; font-weight:bold;">
-        <td style="border:1px solid #334155; padding:6px; text-align:center;">-</td>
-        <td style="border:1px solid #334155; padding:6px; text-align:center;">-</td>
-        <td style="border:1px solid #334155; padding:6px; text-align:left;">Previous Balance (سابقہ پرانا بقایا کھاتہ)</td>
-        <td style="border:1px solid #334155; padding:6px; text-align:center;">-</td>
-        <td style="border:1px solid #334155; padding:6px; text-align:right;">-</td>
-        <td style="border:1px solid #334155; padding:6px; text-align:right;">-</td>
-        <td style="border:1px solid #334155; padding:6px; text-align:right; font-family:monospace; font-weight:800; color:#b91c1c;">Rs. ${(cust.previousBalance || 0).toFixed(0)}</td>
-      </tr>
-      `,
-      ...computedEntries.map((e, idx) => `
-        <tr style="background:${idx % 2 === 1 ? '#f8fafc' : '#ffffff'};">
-          <td style="border:1px solid #334155; padding:6px; text-align:center;">${idx + 1}</td>
-          <td style="border:1px solid #334155; padding:6px; text-align:center; font-family:monospace;">${e.date}</td>
-          <td style="border:1px solid #334155; padding:6px; text-align:left;">${e.details || '-'}</td>
-          <td style="border:1px solid #334155; padding:6px; text-align:center; font-size:10px;">${e.paymentMethod || 'Cash'}</td>
-          <td style="border:1px solid #334155; padding:6px; text-align:right; font-family:monospace; color:#dc2626; font-weight:700;">${e.credit > 0 ? 'Rs. ' + e.credit.toFixed(0) : '-'}</td>
-          <td style="border:1px solid #334155; padding:6px; text-align:right; font-family:monospace; color:#16a34a; font-weight:700;">${e.debit > 0 ? 'Rs. ' + e.debit.toFixed(0) : '-'}</td>
-          <td style="border:1px solid #334155; padding:6px; text-align:right; font-family:monospace; font-weight:800; color:#1e293b;">Rs. ${e.calculatedRunningBalance.toFixed(0)}</td>
-        </tr>
-      `)
-    ].join('');
-
-    const content = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Waqas Mart - Customer Udhar Bill ${cust.name}</title>
-        <style>
-          @page { size: A4 portrait; margin: 12mm; }
-          * { box-sizing: border-box; }
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 0; padding: 15px; font-size: 11.5px; color: #0f172a; line-height: 1.4; }
-          .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2.5px solid #b91c1c; padding-bottom: 10px; margin-bottom: 12px; }
-          .shop-title { font-size: 24px; font-weight: 900; color: #16a34a; margin: 0; }
-          .shop-sub { font-size: 13px; font-weight: 700; color: #b91c1c; margin-top: 2px; }
-          .bill-badge { background: #fee2e2; border: 1.5px solid #dc2626; color: #991b1b; padding: 6px 12px; border-radius: 8px; text-align: right; }
-          .bill-title { font-size: 14px; font-weight: 900; text-transform: uppercase; margin: 0; }
-          .cust-card { display: flex; justify-content: space-between; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; }
-          .cust-info-title { font-size: 16px; font-weight: 900; color: #0f172a; margin-bottom: 4px; }
-          .cust-meta { font-size: 11px; color: #475569; }
-          .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; text-align: center; }
-          .summary-box { border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 6px; background: #ffffff; }
-          .summary-box.highlight { background: #fef2f2; border: 2px solid #ef4444; }
-          .summary-label { font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 700; }
-          .summary-val { font-size: 15px; font-weight: 900; font-family: monospace; margin-top: 2px; }
-          table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px; }
-          th { background-color: #1e293b; color: #ffffff; border: 1px solid #334155; padding: 7px 8px; text-align: center; font-weight: 800; font-size: 11px; }
-          .total-row { background-color: #b91c1c !important; color: #ffffff !important; font-weight: 900; font-family: monospace; }
-          .total-row td { border: 1px solid #991b1b; padding: 8px 6px; }
-          .urdu-notice { margin-top: 15px; padding: 10px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; text-align: center; font-size: 12px; font-weight: 700; color: #92400e; }
-          .signatures { display: flex; justify-content: space-between; margin-top: 45px; padding: 0 40px; }
-          .sig-box { width: 190px; border-top: 1.5px solid #334155; text-align: center; padding-top: 6px; font-size: 11px; font-weight: 700; color: #1e293b; }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <div>
-            <div class="shop-title">WAQAS MART (وقاص مارٹ)</div>
-            <div class="shop-sub">Customer Udhar Statement & Detailed Bill (گاہک تفصیلی ادھار بل)</div>
-            <div style="font-size: 10.5px; color: #64748b; margin-top: 2px;">Retail Supermarket POS & Customer Udhar Accounts</div>
-          </div>
-          <div class="bill-badge">
-            <div class="bill-title">Official Udhar Bill</div>
-            <div style="font-size: 10px; font-family: monospace; margin-top: 2px;">Date: ${new Date().toLocaleDateString('en-GB')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-            <div style="font-size: 10px; font-family: monospace;">Bill No: BILL-${cust.id.slice(-6).toUpperCase()}</div>
-          </div>
-        </div>
-
-        <div class="cust-card">
-          <div>
-            <div class="cust-info-title">${cust.name}</div>
-            <div class="cust-meta"><strong>Phone:</strong> ${cust.phone || 'Not provided'}</div>
-            <div class="cust-meta"><strong>Address:</strong> ${cust.address || 'Local Market'}</div>
-          </div>
-          <div style="text-align: right;">
-            <div style="font-size: 11px; color: #64748b;">Customer Account ID:</div>
-            <div style="font-family: monospace; font-weight: 800; font-size: 13px; color: #1e293b;">${cust.id}</div>
-            <div style="margin-top: 4px; display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 10px; font-weight: 800; background: ${cust.currentBalance > 0 ? '#fee2e2; color: #b91c1c;' : '#dcfce7; color: #15803d;'}">
-              ${cust.currentBalance > 0 ? '⚠️ Udhar Balance Due (بقایا واجب الادا)' : '✅ Account Cleared (کھاتہ بے باق)'}
-            </div>
-          </div>
-        </div>
-
-        <div class="summary-grid">
-          <div class="summary-box">
-            <div class="summary-label">Previous Balance (سابقہ بقایا)</div>
-            <div class="summary-val" style="color: #64748b;">Rs. ${(cust.previousBalance || 0).toFixed(0)}</div>
-          </div>
-          <div class="summary-box">
-            <div class="summary-label">Total Udhar (کل ادھار رقم)</div>
-            <div class="summary-val" style="color: #dc2626;">Rs. ${(cust.totalCredit || 0).toFixed(0)}</div>
-          </div>
-          <div class="summary-box">
-            <div class="summary-label">Total Paid (کل وصولی رقم)</div>
-            <div class="summary-val" style="color: #16a34a;">Rs. ${(cust.totalDebit || 0).toFixed(0)}</div>
-          </div>
-          <div class="summary-box highlight">
-            <div class="summary-label" style="color: #b91c1c;">Net Balance Due (کل واجب الادا)</div>
-            <div class="summary-val" style="color: #b91c1c; font-size: 17px;">Rs. ${(cust.currentBalance || 0).toFixed(0)}</div>
-          </div>
-        </div>
-
-        <table>
-          <thead>
-            <tr>
-              <th style="width: 40px;">#</th>
-              <th style="width: 90px;">Date (تاریخ)</th>
-              <th>Details (تفصیل / رسید نمبر)</th>
-              <th style="width: 80px;">Payment</th>
-              <th style="width: 100px;">Udhar / Credit (ادھار)</th>
-              <th style="width: 100px;">Recovery / Paid (وصولی)</th>
-              <th style="width: 110px;">Balance (بقایا)</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml}
-          </tbody>
-          <tfoot>
-            <tr class="total-row">
-              <td colspan="4" style="text-align: right; text-transform: uppercase;">GRAND TOTALS (کل رقوم)</td>
-              <td style="text-align: right;">Rs. ${(cust.totalCredit || 0).toFixed(0)}</td>
-              <td style="text-align: right;">Rs. ${(cust.totalDebit || 0).toFixed(0)}</td>
-              <td style="text-align: right; font-size: 13px;">Rs. ${(cust.currentBalance || 0).toFixed(0)}</td>
-            </tr>
-          </tfoot>
-        </table>
-
-        <div class="urdu-notice">
-          معزز گاہک! برائے مہربانی اپنا سابقہ و موجودہ واجب الادا ادھار بل (Rs. ${(cust.currentBalance || 0).toFixed(0)}) جلد از جلد وقاص مارٹ پر ادا فرما کر تعاون فرمائیں۔ آپ کے اعتماد اور کاروبار کا شکریہ!
-        </div>
-
-        <div class="signatures">
-          <div class="sig-box">Customer Signature (دستخط گاہک)</div>
-          <div class="sig-box">Waqas Mart Signature (مہر و دستخط وقاص مارٹ)</div>
-        </div>
-      </body>
-      </html>
-    `;
-
-    printHtmlViaIframe(content);
+    setIsPrinting(true);
+    setPrintFeedback(null);
+    const res = await printCustomerLedgerReport(custBase, cEntries, branding);
+    setPrintFeedback({ ok: res.ok, text: res.message });
+    setIsPrinting(false);
   };
 
   // 2. PRINT ALL CUSTOMERS MASTER UDHAR GRAND BILL FOR OWNER
-  const handlePrintAllCustomersUdhar = () => {
-    const rowsHtml = customersWithStats.map((c, idx) => `
-      <tr style="background:${idx % 2 === 1 ? '#f8fafc' : '#ffffff'};">
-        <td style="border:1px solid #334155; padding:5px 6px; text-align:center;">${idx + 1}</td>
-        <td style="border:1px solid #334155; padding:5px 6px; text-align:left; font-weight:700;">${c.name}</td>
-        <td style="border:1px solid #334155; padding:5px 6px; text-align:center; font-family:monospace;">${c.phone || '-'}</td>
-        <td style="border:1px solid #334155; padding:5px 6px; text-align:left; font-size:10px;">${c.address || '-'}</td>
-        <td style="border:1px solid #334155; padding:5px 6px; text-align:right; font-family:monospace;">${c.previousBalance.toFixed(0)}</td>
-        <td style="border:1px solid #334155; padding:5px 6px; text-align:right; font-family:monospace; color:#dc2626; font-weight:700;">${c.totalCredit.toFixed(0)}</td>
-        <td style="border:1px solid #334155; padding:5px 6px; text-align:right; font-family:monospace; color:#16a34a; font-weight:700;">${c.totalDebit.toFixed(0)}</td>
-        <td style="border:1px solid #334155; padding:5px 6px; text-align:right; font-family:monospace; font-weight:800; color:${c.currentBalance > 0 ? '#b91c1c' : '#15803d'};">Rs. ${c.currentBalance.toFixed(0)}</td>
-        <td style="border:1px solid #334155; padding:5px 6px; text-align:center; font-size:10px; font-weight:700;">
-          ${c.currentBalance > 0 ? '<span style="color:#b91c1c;">Udhar Due</span>' : '<span style="color:#16a34a;">Clear</span>'}
-        </td>
-      </tr>
-    `).join('');
-
-    const content = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Waqas Mart - All Customers Master Udhar Register</title>
-        <style>
-          @page { size: A4 landscape; margin: 8mm; }
-          * { box-sizing: border-box; }
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 0; padding: 12px; font-size: 11px; color: #0f172a; }
-          .header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2.5px solid #dc2626; padding-bottom: 8px; margin-bottom: 10px; }
-          .title { font-size: 22px; font-weight: 900; color: #16a34a; margin: 0; }
-          .subtitle { font-size: 13px; font-weight: 700; color: #dc2626; margin-top: 2px; }
-          .meta { text-align: right; font-size: 11px; color: #475569; }
-          .stats-bar { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 10px; text-align: center; }
-          .stat-box { border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 6px; background: #f8fafc; }
-          .stat-box.highlight { background: #fee2e2; border: 1.5px solid #ef4444; }
-          .stat-label { font-size: 9px; text-transform: uppercase; color: #64748b; font-weight: 700; }
-          .stat-val { font-size: 13px; font-weight: 800; font-family: monospace; color: #0f172a; }
-          table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
-          th { background-color: #1e293b; color: #ffffff; border: 1px solid #334155; padding: 6px; text-align: center; font-weight: 800; }
-          .total-row { background-color: #991b1b !important; color: #ffffff !important; font-weight: 900; font-family: monospace; }
-          .total-row td { border: 1px solid #7f1d1d; padding: 7px 6px; }
-          .signatures { display: flex; justify-content: space-between; margin-top: 30px; padding: 0 40px; }
-          .sig-box { width: 180px; border-top: 1px solid #334155; text-align: center; padding-top: 4px; font-size: 11px; font-weight: 700; color: #1e293b; }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <div>
-            <div class="title">WAQAS MART (وقاص مارٹ)</div>
-            <div class="subtitle">All Customers Master Udhar Register & Bill (تمام گاہکوں کا مجموعی ادھار کھاتہ رجسٹر برائے اونر / مالک)</div>
-          </div>
-          <div class="meta">
-            <div><strong>Printed On:</strong> ${new Date().toLocaleDateString('en-GB')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-            <div><strong>Total Registered Customers:</strong> ${grandSummary.totalCustomers}</div>
-          </div>
-        </div>
-
-        <div class="stats-bar">
-          <div class="stat-box"><div class="stat-label">Total Customers</div><div class="stat-val">${grandSummary.totalCustomers}</div></div>
-          <div class="stat-box"><div class="stat-label">Total Prev Balance</div><div class="stat-val">${grandSummary.totalPreviousBalance.toFixed(0)}</div></div>
-          <div class="stat-box"><div class="stat-label">Total Udhar Given</div><div class="stat-val" style="color:#dc2626;">Rs. ${grandSummary.totalGiven.toFixed(0)}</div></div>
-          <div class="stat-box"><div class="stat-label">Total Recovery Received</div><div class="stat-val" style="color:#16a34a;">Rs. ${grandSummary.totalReceived.toFixed(0)}</div></div>
-          <div class="stat-box highlight"><div class="stat-label" style="color:#991b1b;">Total Market Udhar Due</div><div class="stat-val" style="color:#991b1b; font-size:15px;">Rs. ${grandSummary.totalOutstanding.toFixed(0)}</div></div>
-        </div>
-
-        <table>
-          <thead>
-            <tr>
-              <th style="width: 35px;">#</th>
-              <th>Customer Name (گاہک کا نام)</th>
-              <th>Phone</th>
-              <th>Address</th>
-              <th>Prev Balance</th>
-              <th>Total Udhar (Credit)</th>
-              <th>Total Paid (Recovery)</th>
-              <th>Net Due Balance (بقایا)</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml}
-          </tbody>
-          <tfoot>
-            <tr class="total-row">
-              <td colspan="4" style="text-align: center;">GRAND TOTALS (تمام گاہکوں کا مجموعی ٹوٹل)</td>
-              <td style="text-align: right;">${grandSummary.totalPreviousBalance.toFixed(0)}</td>
-              <td style="text-align: right;">Rs. ${grandSummary.totalGiven.toFixed(0)}</td>
-              <td style="text-align: right;">Rs. ${grandSummary.totalReceived.toFixed(0)}</td>
-              <td style="text-align: right; font-size: 13px;">Rs. ${grandSummary.totalOutstanding.toFixed(0)}</td>
-              <td style="text-align: center;">-</td>
-            </tr>
-          </tfoot>
-        </table>
-
-        <div class="signatures">
-          <div class="sig-box">Prepared By (Cashier)</div>
-          <div class="sig-box">Verified By (Accountant)</div>
-          <div class="sig-box">Approved By Owner (دستخط مالک)</div>
-        </div>
-      </body>
-      </html>
-    `;
-
-    printHtmlViaIframe(content);
+  const handlePrintAllCustomersUdhar = async () => {
+    setIsPrinting(true);
+    setPrintFeedback(null);
+    const res = await printAllCustomersLedgerSummary(customersWithStats, branding);
+    setPrintFeedback({ ok: res.ok, text: res.message });
+    setIsPrinting(false);
   };
 
   return (
@@ -715,6 +445,19 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
       />
 
       <div className="flex-1 min-h-0 p-3 sm:p-5 lg:p-6 w-full space-y-4 overflow-y-auto">
+        {printFeedback && (
+          <div
+            className={`px-4 py-2.5 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 ${
+              printFeedback.ok
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-red-50 border-red-200 text-red-700'
+            }`}
+          >
+            <span>{printFeedback.text}</span>
+            <button type="button" onClick={() => setPrintFeedback(null)} className="font-black cursor-pointer">×</button>
+          </div>
+        )}
+
         {/* Toast Feedback */}
         {feedbackMsg && (
           <div className="fixed top-4 right-4 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-bold animate-fade-in border border-slate-700">

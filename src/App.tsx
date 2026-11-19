@@ -41,6 +41,11 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import {
+  applyPurchaseDeleteToState,
+  applyPurchaseSaveToState,
+  formatStockAuditTimestamp,
+} from './utils/purchaseHelpers';
+import {
   Product,
   CartItem,
   POSMode,
@@ -65,6 +70,9 @@ import {
   DvrNvrConfig,
   SecurityConfig,
   PaymentMethod,
+  StockTransaction,
+  PrinterSettings,
+  DEFAULT_PRINTER_SETTINGS,
 } from './types/pos';
 import {
   SCREENSHOT_CATEGORIES,
@@ -74,6 +82,8 @@ import {
 } from './data/defaultProducts';
 import { sounds } from './utils/audio';
 import { syncService } from './utils/syncService';
+import { loadPrinterSettings, savePrinterSettings } from './utils/printerService';
+import { PrinterSettingsModal } from './components/PrinterSettingsModal';
 import { BarcodeScannerModal } from './components/BarcodeScannerModal';
 import { AddNewProductModal } from './components/AddNewProductModal';
 import { PurchaseEntryPage } from './components/PurchaseEntryPage';
@@ -134,9 +144,11 @@ const STORAGE_KEYS = {
   CCTV_CAMERAS: 'waqas_mart_cctv_cameras_v6',
   DVR_CONFIG: 'waqas_mart_dvr_config_v6',
   SECURITY_CONFIG: 'waqas_mart_security_config_v6',
+  STOCK_HISTORY: 'waqas_mart_stock_history_v1',
+  PRINTER_SETTINGS: 'waqas_mart_printer_settings_v1',
 };
 
-// Purge legacy obsolete cached keys that contained Pepsi 1.5L and old demo data
+// Purge legacy obsolete cached keys (IMPORTANT: NEVER remove waqas_mart_daily_hisab_v2!)
 try {
   [
     'waqas_mart_inventory_v2',
@@ -146,7 +158,6 @@ try {
     'waqas_mart_transactions_v2',
     'waqas_mart_purchases_v2',
     'waqas_mart_customers_v2',
-    'waqas_mart_daily_hisab_v2',
   ].forEach((k) => localStorage.removeItem(k));
 } catch {}
 
@@ -297,6 +308,18 @@ export default function App() {
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [currentTransaction, setCurrentTransaction] = useState<SaleTransaction | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isPrinterSettingsOpen, setIsPrinterSettingsOpen] = useState(false);
+  const [, setPrinterSettings] = useState<PrinterSettings>(() => loadPrinterSettings());
+  const [stockHistory, setStockHistory] = useState<StockTransaction[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.STOCK_HISTORY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [scannedBarcodeForNewPos, setScannedBarcodeForNewPos] = useState<string | null>(null);
 
@@ -306,6 +329,23 @@ export default function App() {
   const [isPwaInstallOpen, setIsPwaInstallOpen] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isRevoked, setIsRevoked] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.STOCK_HISTORY, JSON.stringify(stockHistory));
+    } catch (e) {
+      console.warn('Failed to persist stock history', e);
+    }
+  }, [stockHistory]);
+
+  const appendStockTransactions = (entries: StockTransaction[]) => {
+    if (!entries || entries.length === 0) return;
+    setStockHistory((prev) => {
+      const next = [...entries, ...prev].slice(0, 5000);
+      syncService.syncStockHistory(next);
+      return next;
+    });
+  };
 
   useEffect(() => {
     const handleBeforeInstall = (e: Event) => {
@@ -596,6 +636,25 @@ export default function App() {
         if (serverStore.branding) {
           setBranding(serverStore.branding);
         }
+        if (serverStore.stockHistory && serverStore.stockHistory.length > 0) {
+          setStockHistory(serverStore.stockHistory);
+        }
+        if (serverStore.purchaseReturns && serverStore.purchaseReturns.length > 0) {
+          setPurchaseReturns(serverStore.purchaseReturns);
+        }
+        if (serverStore.supplierLedgers && serverStore.supplierLedgers.length > 0) {
+          setSupplierLedgers(serverStore.supplierLedgers);
+        }
+        if (serverStore.expenses && serverStore.expenses.length > 0) {
+          setExpenses(serverStore.expenses);
+        }
+        if (serverStore.staffList && serverStore.staffList.length > 0) {
+          setStaffList(serverStore.staffList);
+        }
+        if (serverStore.printerSettings) {
+          setPrinterSettings(serverStore.printerSettings);
+          savePrinterSettings(serverStore.printerSettings);
+        }
       }
     });
 
@@ -604,34 +663,38 @@ export default function App() {
       const myDeviceId = syncService.getDevice().deviceId;
 
       if (event.type === 'sale:completed') {
-        const { transaction, updatedProducts, customerLedgers } = event.payload || {};
+        const { transaction, updatedProducts, customerLedgers, stockHistory: srvHist } = event.payload || {};
         if (transaction && event.sourceDeviceId !== myDeviceId) {
           setTransactions((prev) => {
             if (prev.some((t) => t.invoiceNumber === transaction.invoiceNumber)) return prev;
             return [transaction, ...prev];
           });
-          if (Array.isArray(updatedProducts)) {
-            setProducts(updatedProducts);
-          }
-          if (Array.isArray(customerLedgers)) {
-            setCustomerLedgerEntries(customerLedgers);
-          }
+          if (Array.isArray(updatedProducts)) setProducts(updatedProducts);
+          if (Array.isArray(customerLedgers)) setCustomerLedgerEntries(customerLedgers);
+          if (Array.isArray(srvHist)) setStockHistory(srvHist);
           showToast(`⚡ Real-Time Sync: New sale #${transaction.invoiceNumber} recorded on another counter!`, 'info');
         }
-      } else if (event.type === 'purchase:added') {
-        const { purchase, updatedProducts } = event.payload || {};
+      } else if (event.type === 'purchase:added' || event.type === 'purchase:updated') {
+        const { purchase, updatedProducts, stockHistory: srvHist } = event.payload || {};
         if (purchase && event.sourceDeviceId !== myDeviceId) {
           setPurchases((prev) => {
-            if (prev.some((p) => p.purchaseInvoiceNo === purchase.purchaseInvoiceNo)) return prev;
+            const exists = prev.some((p) => p.id === purchase.id || p.purchaseInvoiceNo === purchase.purchaseInvoiceNo);
+            if (exists) return prev.map((p) => (p.id === purchase.id ? purchase : p));
             return [purchase, ...prev];
           });
-          if (Array.isArray(updatedProducts)) {
-            setProducts(updatedProducts);
-          }
-          showToast(`⚡ Real-Time Sync: Purchase #${purchase.purchaseInvoiceNo} received on another terminal.`, 'info');
+          if (Array.isArray(updatedProducts)) setProducts(updatedProducts);
+          if (Array.isArray(srvHist)) setStockHistory(srvHist);
+          showToast(`⚡ Real-Time Sync: Purchase #${purchase.purchaseInvoiceNo} synced.`, 'info');
+        }
+      } else if (event.type === 'purchase:deleted') {
+        const { purchaseId, updatedProducts, stockHistory: srvHist } = event.payload || {};
+        if (event.sourceDeviceId !== myDeviceId) {
+          if (purchaseId) setPurchases((prev) => prev.filter((p) => p.id !== purchaseId));
+          if (Array.isArray(updatedProducts)) setProducts(updatedProducts);
+          if (Array.isArray(srvHist)) setStockHistory(srvHist);
         }
       } else if (event.type === 'return:processed') {
-        const { saleReturn, updatedProducts, customerLedgers } = event.payload || {};
+        const { saleReturn, updatedProducts, customerLedgers, stockHistory: srvHist } = event.payload || {};
         if (saleReturn && event.sourceDeviceId !== myDeviceId) {
           setSaleReturns((prev) => {
             if (prev.some((r) => r.returnNumber === saleReturn.returnNumber)) return prev;
@@ -639,7 +702,18 @@ export default function App() {
           });
           if (Array.isArray(updatedProducts)) setProducts(updatedProducts);
           if (Array.isArray(customerLedgers)) setCustomerLedgerEntries(customerLedgers);
+          if (Array.isArray(srvHist)) setStockHistory(srvHist);
           showToast(`⚡ Real-Time Sync: Return #${saleReturn.returnNumber} restocked.`, 'info');
+        }
+      } else if (event.type === 'purchase_return:processed') {
+        const { purchaseReturn, updatedProducts, stockHistory: srvHist } = event.payload || {};
+        if (purchaseReturn && event.sourceDeviceId !== myDeviceId) {
+          setPurchaseReturns((prev) => {
+            if (prev.some((r) => r.returnNumber === purchaseReturn.returnNumber)) return prev;
+            return [purchaseReturn, ...prev];
+          });
+          if (Array.isArray(updatedProducts)) setProducts(updatedProducts);
+          if (Array.isArray(srvHist)) setStockHistory(srvHist);
         }
       } else if (event.type === 'stock:updated') {
         if (Array.isArray(event.payload) && event.sourceDeviceId !== myDeviceId) {
@@ -657,6 +731,7 @@ export default function App() {
           if (Array.isArray(store.customers)) setCustomers(store.customers);
           if (Array.isArray(store.customerLedgers)) setCustomerLedgerEntries(store.customerLedgers);
           if (Array.isArray(store.heldBills)) setHeldBills(store.heldBills);
+          if (Array.isArray(store.stockHistory)) setStockHistory(store.stockHistory);
           if (store.branding) setBranding(store.branding);
         }
       } else if (event.type === 'device:revoked') {
@@ -837,24 +912,41 @@ export default function App() {
   const handleSaveExpense = (expense: ExpenseEntry) => {
     setExpenses((prev) => {
       const idx = prev.findIndex((e) => e.id === expense.id);
-      if (idx > -1) {
-        const next = [...prev];
-        next[idx] = expense;
-        return next;
-      }
-      return [expense, ...prev];
+      const next = idx > -1 ? prev.map((e) => (e.id === expense.id ? expense : e)) : [expense, ...prev];
+      syncService.syncExpenses(next);
+      return next;
     });
   };
 
   const handleDeleteExpense = (expenseId: string) => {
-    setExpenses((prev) => prev.filter((e) => e.id !== expenseId));
+    setExpenses((prev) => {
+      const next = prev.filter((e) => e.id !== expenseId);
+      syncService.syncExpenses(next);
+      return next;
+    });
   };
 
   const handleDeleteAllExpenses = () => {
     setExpenses([]);
+    syncService.syncExpenses([]);
   };
 
   const handleSavePurchaseReturn = (ret: PurchaseReturn) => {
+    if (purchaseReturns.some((r) => r.returnNumber === ret.returnNumber)) {
+      showToast(`Purchase return #${ret.returnNumber} already saved.`, 'info');
+      return;
+    }
+
+    const nowStr = new Date().toLocaleString('en-PK', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+    const histEntries: StockTransaction[] = [];
+
     // 1. Save return record
     setPurchaseReturns((prev) => [ret, ...prev]);
 
@@ -864,14 +956,26 @@ export default function App() {
       ret.items.forEach((item) => {
         const idx = next.findIndex((p) => p.id === item.productId || (item.barcode && p.barcode === item.barcode));
         if (idx > -1) {
-          next[idx] = {
-            ...next[idx],
-            stock: Math.max(0, next[idx].stock - item.quantity),
-          };
+          const prevStock = Number(next[idx].stock) || 0;
+          const nextStock = Math.max(0, prevStock - item.quantity);
+          histEntries.push({
+            id: `stk-pret-${Date.now()}-${next[idx].id}`,
+            productId: next[idx].id,
+            productName: next[idx].name,
+            barcode: next[idx].barcode,
+            previousStock: prevStock,
+            quantityChange: -(prevStock - nextStock),
+            newStock: nextStock,
+            transactionType: 'Purchase Return',
+            invoiceNumber: ret.returnNumber,
+            dateTime: nowStr,
+          });
+          next[idx] = { ...next[idx], stock: nextStock };
         }
       });
       return next;
     });
+    appendStockTransactions(histEntries);
 
     // 3. Record in Supplier Ledgers as debit (reduces our payable balance to supplier)
     const ledgerEntry: SupplierLedgerEntry = {
@@ -887,6 +991,7 @@ export default function App() {
       createdAt: new Date().toISOString(),
     };
     handleSaveSupplierLedgerEntry(ledgerEntry);
+    syncService.syncPurchaseReturn(ret);
     showToast(`Purchase return of Rs. ${ret.totalRefund.toFixed(0)} saved and inventory adjusted.`, 'success');
   };
 
@@ -901,21 +1006,23 @@ export default function App() {
   const handleSaveStaff = (staff: StaffMember) => {
     setStaffList((prev) => {
       const idx = prev.findIndex((s) => s.id === staff.id);
-      if (idx > -1) {
-        const next = [...prev];
-        next[idx] = staff;
-        return next;
-      }
-      return [staff, ...prev];
+      const next = idx > -1 ? prev.map((s) => (s.id === staff.id ? staff : s)) : [staff, ...prev];
+      syncService.syncStaff(next);
+      return next;
     });
   };
 
   const handleDeleteStaff = (staffId: string) => {
-    setStaffList((prev) => prev.filter((s) => s.id !== staffId));
+    setStaffList((prev) => {
+      const next = prev.filter((s) => s.id !== staffId);
+      syncService.syncStaff(next);
+      return next;
+    });
   };
 
   const handleDeleteAllStaff = () => {
     setStaffList([]);
+    syncService.syncStaff([]);
   };
 
   const handleSaveCctvCamera = (camera: CctvCamera) => {
@@ -944,31 +1051,50 @@ export default function App() {
     showToast('Security settings updated successfully', 'success');
   };
 
-  // Add Product to Cart with Negative Stock Allowed (Negative Stock Management System)
+  // Add Product to Cart with Stock Protection (normal sales cannot exceed available stock)
   const addToCart = (product: Product, qtyToAdd = 1) => {
-    // Note: Allow selling even when available stock is zero or negative.
-    // Do not block sale because of insufficient stock.
+    const liveProduct = products.find((p) => p.id === product.id) || product;
+    const availStock = Number(liveProduct.stock) || 0;
+    const existingCartQty = cart.find((i) => i.product.id === liveProduct.id)?.quantity || 0;
+
+    if (mode === 'sale') {
+      if (availStock <= 0) {
+        sounds.playErrorTone();
+        showToast(`OUT OF STOCK — "${liveProduct.name}" has 0 stock available. Purchase stock first.`, 'error');
+        return;
+      }
+      if (existingCartQty + qtyToAdd > availStock) {
+        sounds.playErrorTone();
+        showToast(
+          `INSUFFICIENT STOCK — Only ${availStock} units available for "${liveProduct.name}".`,
+          'error'
+        );
+        return;
+      }
+    }
+
     sounds.playBarcodeBeep();
 
     setCart((prevCart) => {
-      const index = prevCart.findIndex((i) => i.product.id === product.id);
+      const index = prevCart.findIndex((i) => i.product.id === liveProduct.id);
       if (index > -1) {
         const next = [...prevCart];
         const newQty = next[index].quantity + qtyToAdd;
         next[index] = {
           ...next[index],
+          product: liveProduct,
           quantity: newQty,
           lineTotal: newQty * next[index].unitPrice,
         };
         return next;
       } else {
         const newItem: CartItem = {
-          id: `item-${Date.now()}-${product.id}`,
-          product,
+          id: `item-${Date.now()}-${liveProduct.id}`,
+          product: liveProduct,
           quantity: qtyToAdd,
-          unitPrice: product.price,
+          unitPrice: liveProduct.price,
           discountAmount: 0,
-          lineTotal: product.price * qtyToAdd,
+          lineTotal: liveProduct.price * qtyToAdd,
         };
         return [...prevCart, newItem];
       }
@@ -980,7 +1106,23 @@ export default function App() {
       removeCartItem(itemId);
       return;
     }
-    // Allow any quantity entry directly (e.g. 50, 100, 500) even when exceeding stock
+
+    if (mode === 'sale') {
+      const targetItem = cart.find((i) => i.id === itemId);
+      if (targetItem) {
+        const liveProduct = products.find((p) => p.id === targetItem.product.id) || targetItem.product;
+        const availStock = Number(liveProduct.stock) || 0;
+        if (newQty > availStock) {
+          sounds.playErrorTone();
+          showToast(
+            `INSUFFICIENT STOCK — Only ${availStock} units available for "${liveProduct.name}".`,
+            'error'
+          );
+          return;
+        }
+      }
+    }
+
     setCart((prev) =>
       prev.map((i) => {
         if (i.id === itemId) {
@@ -1050,107 +1192,63 @@ export default function App() {
     }
   };
 
-  // Real Purchase Processing
+  // Real Purchase Processing (With Duplicate Guard, Negative Qty Stock Adjustment & Stock Transaction History)
   const handleSavePurchase = (purchase: PurchaseTransaction, isEdit: boolean = false) => {
-    if (isEdit) {
-      const oldPurchase = purchases.find((p) => p.id === purchase.id);
-      if (oldPurchase) {
-        setProducts((prev) =>
-          prev.map((prod) => {
-            const oldItem = oldPurchase.items.find((i) => i.productId === prod.id);
-            const newItem = purchase.items.find((i) => i.productId === prod.id);
-            const oldQty = oldItem ? oldItem.quantity : 0;
-            const newQty = newItem ? newItem.quantity : 0;
-            const netDelta = newQty - oldQty;
-            const newCost = newItem ? newItem.purchaseCost : prod.costPrice;
-            return {
-              ...prod,
-              stock: Math.max(0, prod.stock + netDelta),
-              costPrice: newCost,
-            };
-          })
-        );
-      }
-    } else {
-      setProducts((prev) =>
-        prev.map((prod) => {
-          const match = purchase.items.find((i) => i.productId === prod.id);
-          if (match) {
-            return {
-              ...prod,
-              stock: prod.stock + match.quantity,
-              costPrice: match.purchaseCost,
-              price: match.salePrice && match.salePrice > 0 ? match.salePrice : prod.price,
-            };
-          }
-          return prod;
-        })
-      );
-    }
-
-    setSuppliers((prev) =>
-      prev.map((sup) => {
-        if (sup.id === purchase.supplierId) {
-          if (isEdit) {
-            const old = purchases.find((p) => p.id === purchase.id);
-            const oldRemaining = old ? old.remainingBalance : 0;
-            const diff = purchase.remainingBalance - oldRemaining;
-            return { ...sup, payableBalance: Math.max(0, sup.payableBalance + diff) };
-          } else {
-            return { ...sup, payableBalance: sup.payableBalance + purchase.remainingBalance };
-          }
-        }
-        return sup;
-      })
-    );
-
-    setPurchases((prev) => {
-      if (isEdit) {
-        return prev.map((p) => (p.id === purchase.id ? purchase : p));
-      } else {
-        return [purchase, ...prev];
-      }
+    const actor = purchase.editBy || purchase.userName || currentUser.displayName || 'Admin';
+    const result = applyPurchaseSaveToState({
+      purchase: {
+        ...purchase,
+        userName: purchase.userName || actor,
+      },
+      isEdit,
+      products,
+      suppliers,
+      purchases,
+      userName: actor,
+      timestampStr: formatStockAuditTimestamp(),
     });
 
-    syncService.syncPurchase(purchase);
+    if (result.duplicateBlocked) {
+      showToast(`Purchase #${purchase.purchaseInvoiceNo} is already saved. Stock was not modified twice.`, 'info');
+      return;
+    }
+
+    setProducts(result.products);
+    setSuppliers(result.suppliers);
+    setPurchases(result.purchases);
+    if (result.stockEntries.length > 0) {
+      appendStockTransactions(result.stockEntries);
+    }
+
+    if (isEdit) {
+      syncService.syncPurchaseUpdate(purchase);
+    } else {
+      syncService.syncPurchase(purchase);
+    }
     sounds.playSuccessChime();
   };
 
   const handleDeletePurchase = (purchaseId: string) => {
-    const toDelete = purchases.find((p) => p.id === purchaseId);
-    if (!toDelete) return;
+    const reversed = applyPurchaseDeleteToState({
+      purchaseId,
+      products,
+      suppliers,
+      purchases,
+      userName: currentUser.displayName || 'Admin',
+      timestampStr: formatStockAuditTimestamp(),
+    });
 
-    // 1. Reverse stock
-    setProducts((prev) =>
-      prev.map((prod) => {
-        const item = toDelete.items?.find((i) => i.productId === prod.id);
-        if (item) {
-          return {
-            ...prod,
-            stock: Math.max(0, prod.stock - item.quantity),
-          };
-        }
-        return prod;
-      })
-    );
+    if (!reversed.deletedPurchase) return;
 
-    // 2. Reverse supplier payable balance
-    setSuppliers((prev) =>
-      prev.map((sup) => {
-        if (sup.id === toDelete.supplierId) {
-          return {
-            ...sup,
-            payableBalance: Math.max(0, sup.payableBalance - toDelete.remainingBalance),
-          };
-        }
-        return sup;
-      })
-    );
-
-    // 3. Remove from purchases list
-    setPurchases((prev) => prev.filter((p) => p.id !== purchaseId));
+    setProducts(reversed.products);
+    setSuppliers(reversed.suppliers);
+    setPurchases(reversed.purchases);
+    if (reversed.stockEntries.length > 0) {
+      appendStockTransactions(reversed.stockEntries);
+    }
+    syncService.syncPurchaseDelete(reversed.deletedPurchase.id);
     sounds.playSuccessChime();
-    showToast(`Purchase #${toDelete.purchaseInvoiceNo} cancelled & reversed.`, 'info');
+    showToast(`Purchase #${reversed.deletedPurchase.purchaseInvoiceNo} cancelled & stock reversed.`, 'info');
   };
 
   const handleAddSupplier = (supplier: Supplier) => {
@@ -1159,8 +1257,34 @@ export default function App() {
   };
 
   const handleSaveNewProduct = (newProd: Product) => {
-    setProducts((prev) => [newProd, ...prev]);
-    syncService.syncStock([newProd, ...products]);
+    setProducts((prev) => {
+      const next = [newProd, ...prev];
+      syncService.syncStock(next);
+      return next;
+    });
+    if ((Number(newProd.stock) || 0) > 0) {
+      appendStockTransactions([
+        {
+          id: `stk-open-${Date.now()}-${newProd.id}`,
+          productId: newProd.id,
+          productName: newProd.name,
+          barcode: newProd.barcode,
+          previousStock: 0,
+          quantityChange: Number(newProd.stock),
+          newStock: Number(newProd.stock),
+          transactionType: 'Opening Stock',
+          invoiceNumber: 'NEW-PRODUCT',
+          dateTime: new Date().toLocaleString('en-PK', {
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+          }),
+        },
+      ]);
+    }
     sounds.playSuccessChime();
     showToast(`Product "${newProd.name}" saved to inventory!`, 'success');
   };
@@ -1170,7 +1294,8 @@ export default function App() {
       const idx = prev.findIndex((p) => p.id === prod.id);
       if (idx > -1) {
         const next = [...prev];
-        next[idx] = prod;
+        // Enforce stock protection: editing product details preserves actual stock
+        next[idx] = { ...prod, stock: prev[idx].stock };
         syncService.syncStock(next);
         return next;
       }
@@ -1193,6 +1318,21 @@ export default function App() {
 
   // Real Sale Return with Automatic Restocking & Refund Settlement
   const handleConfirmReturn = (returnRecord: SaleReturn) => {
+    if (saleReturns.some((r) => r.returnNumber === returnRecord.returnNumber)) {
+      showToast(`Return #${returnRecord.returnNumber} already processed.`, 'info');
+      return;
+    }
+
+    const nowStr = new Date().toLocaleString('en-PK', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+    const histEntries: StockTransaction[] = [];
+
     // 1. Restock accepted resaleable items back to product inventory
     let restockedUnits = 0;
     setProducts((prev) =>
@@ -1202,14 +1342,29 @@ export default function App() {
         );
         if (returnItem) {
           restockedUnits += returnItem.quantity;
+          const prevStock = Number(prod.stock) || 0;
+          const nextStock = prevStock + returnItem.quantity;
+          histEntries.push({
+            id: `stk-sret-${Date.now()}-${prod.id}`,
+            productId: prod.id,
+            productName: prod.name,
+            barcode: prod.barcode,
+            previousStock: prevStock,
+            quantityChange: returnItem.quantity,
+            newStock: nextStock,
+            transactionType: 'Sale Return',
+            invoiceNumber: returnRecord.returnNumber,
+            dateTime: nowStr,
+          });
           return {
             ...prod,
-            stock: prod.stock + returnItem.quantity,
+            stock: nextStock,
           };
         }
         return prod;
       })
     );
+    appendStockTransactions(histEntries);
 
     // 2. If refund method is Credit Adjustment, reduce customer's Udhar balance in customer ledger
     if (returnRecord.refundMethod === 'credit' && returnRecord.customerName) {
@@ -1499,7 +1654,7 @@ export default function App() {
     };
   };
 
-  // Checkout Confirmation
+  // Checkout Confirmation (With Stock Protection & Stock History)
   const handleConfirmCheckout = (details: {
     method: PaymentMethod;
     cashTendered?: number;
@@ -1513,30 +1668,64 @@ export default function App() {
   }) => {
     if (cart.length === 0 || grandTotal < 0) return;
 
-    // Deduct stock ONLY when sale is completed
+    // Validate available stock for normal sales
     if (mode === 'sale') {
+      for (const item of cart) {
+        const liveProd = products.find((p) => p.id === item.product.id) || item.product;
+        const avail = Number(liveProd.stock) || 0;
+        if (item.quantity > avail) {
+          sounds.playErrorTone();
+          showToast(
+            `INSUFFICIENT STOCK — "${liveProd.name}" has only ${avail} units available (requested ${item.quantity}).`,
+            'error'
+          );
+          return;
+        }
+      }
+    }
+
+    const invoiceNumber = `WM-${Date.now().toString().slice(-6)}`;
+    const nowStr = new Date().toLocaleString('en-PK', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+
+    // Deduct stock ONLY when sale is completed & record StockTransaction
+    if (mode === 'sale') {
+      const histEntries: StockTransaction[] = [];
       setProducts((prev) =>
         prev.map((p) => {
           const cartMatch = cart.find((i) => i.product.id === p.id);
           if (cartMatch) {
-            return { ...p, stock: p.stock - cartMatch.quantity };
+            const prevStock = Number(p.stock) || 0;
+            const nextStock = prevStock - cartMatch.quantity;
+            histEntries.push({
+              id: `stk-sale-${Date.now()}-${p.id}`,
+              productId: p.id,
+              productName: p.name,
+              barcode: p.barcode,
+              previousStock: prevStock,
+              quantityChange: -cartMatch.quantity,
+              newStock: nextStock,
+              transactionType: 'Sale',
+              invoiceNumber,
+              dateTime: nowStr,
+            });
+            return { ...p, stock: nextStock };
           }
           return p;
         })
       );
+      appendStockTransactions(histEntries);
     }
 
-    const invoiceNumber = `WM-${Date.now().toString().slice(-6)}`;
     const transaction: SaleTransaction = {
       invoiceNumber,
-      dateTime: new Date().toLocaleString('en-PK', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-      }),
+      dateTime: nowStr,
       mode,
       items: [...cart],
       subtotal,
@@ -1621,7 +1810,7 @@ export default function App() {
   };
 
   // Customer Management Handlers
-    const handleSaveNewPosInvoice = (invoiceData: {
+  const handleSaveNewPosInvoice = (invoiceData: {
     items: CartItem[];
     subtotal: number;
     discount: number;
@@ -1636,28 +1825,65 @@ export default function App() {
     invoiceNumber: string;
     note?: string;
   }) => {
-    // 1. Deduct stock from shared products inventory (Negative Stock Management System: e.g. 0 - 5 = -5)
+    if (transactions.some((t) => t.invoiceNumber === invoiceData.invoiceNumber)) {
+      showToast(`Invoice #${invoiceData.invoiceNumber} is already saved.`, 'info');
+      return;
+    }
+
+    // Validate available stock before completing sale
+    for (const it of invoiceData.items) {
+      const liveProd = products.find((p) => p.id === it.product.id) || it.product;
+      const avail = Number(liveProd.stock) || 0;
+      if (it.quantity > avail) {
+        sounds.playErrorTone();
+        showToast(
+          `INSUFFICIENT STOCK — "${liveProd.name}" has only ${avail} units available (requested ${it.quantity}).`,
+          'error'
+        );
+        return;
+      }
+    }
+
+    const nowStr = new Date().toLocaleString('en-PK', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+    const histEntries: StockTransaction[] = [];
+
+    // 1. Deduct stock from shared products inventory & record StockTransaction
     setProducts((prev) =>
       prev.map((p) => {
         const match = invoiceData.items.find((it) => it.product.id === p.id);
         if (match) {
-          return { ...p, stock: p.stock - match.quantity };
+          const prevStock = Number(p.stock) || 0;
+          const nextStock = prevStock - match.quantity;
+          histEntries.push({
+            id: `stk-nsale-${Date.now()}-${p.id}`,
+            productId: p.id,
+            productName: p.name,
+            barcode: p.barcode,
+            previousStock: prevStock,
+            quantityChange: -match.quantity,
+            newStock: nextStock,
+            transactionType: 'Sale',
+            invoiceNumber: invoiceData.invoiceNumber,
+            dateTime: nowStr,
+          });
+          return { ...p, stock: nextStock };
         }
         return p;
       })
     );
+    appendStockTransactions(histEntries);
 
     // 2. Create SaleTransaction
     const transaction: SaleTransaction = {
       invoiceNumber: invoiceData.invoiceNumber,
-      dateTime: new Date().toLocaleString('en-PK', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-      }),
+      dateTime: nowStr,
       mode: 'sale',
       items: [...invoiceData.items],
       subtotal: invoiceData.subtotal,
@@ -1898,11 +2124,12 @@ export default function App() {
   const isHomePage = activeNav === 'Home';
   const isNewSalePage = activeNav === 'New Sale POS' || activeNav === 'New Sale' || activeNav === 'New Sale Page' || activeNav === 'POS Terminal' || activeNav === 'New POS';
   const isOldSalePage = activeNav === 'Sale POS' || activeNav === 'Old Sale' || activeNav === 'Classic Sale POS' || activeNav === 'Classic Sale' || activeNav === 'Old Sale Page';
+  const isPurchaseWorkstationPage = activeNav === 'New Purchase Entry' || activeNav === 'New Purchase' || activeNav === 'Purchase Entry' || activeNav === 'Old Purchase' || activeNav === 'Classic Purchase' || activeNav === 'Old Purchase Entry';
 
   return (
     <div className="h-[100dvh] w-full max-w-full bg-[#f8fafc] text-slate-900 flex flex-col font-sans overflow-hidden">
       {/* MAIN CONTENT WORKSPACE (Allows complete vertical scrolling for every page) */}
-      <main className={`flex-1 flex flex-col min-w-0 min-h-0 w-full overflow-y-auto overflow-x-hidden ${isNewSalePage || isOldSalePage ? 'pb-0' : 'pb-16 lg:pb-0'} overscroll-y-contain`}>
+      <main className={`flex-1 flex flex-col min-w-0 min-h-0 w-full ${isPurchaseWorkstationPage ? 'overflow-hidden pb-0' : isNewSalePage || isOldSalePage ? 'overflow-y-auto overflow-x-hidden pb-0' : 'overflow-y-auto overflow-x-hidden pb-16 lg:pb-0'} overscroll-y-contain`}>
         {/* CONDITIONAL PAGE RENDER (ALL 22 EXISTING PAGES & MODULES) */}
         {activeNav === 'Device Management' || activeNav === 'Connect New Device' ? (
           /* PAGE 19: MULTI-DEVICE MANAGEMENT & QR TERMINAL CONNECTIONS */
@@ -1916,11 +2143,12 @@ export default function App() {
             isPwaInstallable={true}
           />
         ) : activeNav === 'Daily Hisab' ? (
-          /* PAGE 12: DAILY HISAB EXCEL SPREADSHEET (MATCHING USER'S EXCEL PHOTO) */
+          /* PAGE 12: DAILY HISAB EXCEL SPREADSHEET */
           <DailyHisabExcelPage
             transactions={transactions}
             purchases={purchases}
             customerLedgerEntries={customerLedgerEntries}
+            branding={branding}
             onNavigateToSummary={() => setActiveNav('Sale Summary')}
             onNavigateToLedgers={() => {
               setActiveNav('Customer Ledgers');
@@ -1933,6 +2161,7 @@ export default function App() {
           <CustomerLedgersPage
             customers={customers}
             ledgerEntries={customerLedgerEntries}
+            branding={branding}
             onSaveCustomer={handleSaveCustomer}
             onDeleteCustomer={handleDeleteCustomer}
             onSaveLedgerEntry={handleSaveLedgerEntry}
@@ -1949,6 +2178,7 @@ export default function App() {
             suppliers={suppliers}
             purchases={purchases}
             ledgerEntries={supplierLedgers}
+            branding={branding}
             onSaveLedgerEntry={handleSaveSupplierLedgerEntry}
             onDeleteLedgerEntry={handleDeleteSupplierLedgerEntry}
             onSaveSupplier={handleSaveSupplier}
@@ -1957,10 +2187,12 @@ export default function App() {
             onBackToHome={() => setActiveNav('Home')}
           />
         ) : activeNav === 'Total Stock' || activeNav === 'Products' || activeNav === 'Stock' ? (
-          /* PAGE 6 & 7: TOTAL STOCK & PRODUCT MANAGEMENT */
+          /* PAGE 6 & 7: TOTAL STOCK & PRODUCT MANAGEMENT (READ-ONLY STOCK) */
           <TotalStockPage
             products={products}
             categories={categories}
+            stockHistory={stockHistory}
+            branding={branding}
             onSaveProduct={handleSaveProduct}
             onDeleteProduct={handleDeleteProduct}
             onDeleteAllProducts={handleDeleteAllProducts}
@@ -1979,6 +2211,7 @@ export default function App() {
             saleReturns={saleReturns}
             products={products}
             purchases={purchases}
+            branding={branding}
             onSelectInvoiceToPrint={(tx) => {
               setCurrentTransaction(tx);
               setIsReceiptOpen(true);
@@ -2107,12 +2340,15 @@ export default function App() {
             }}
           />
         ) : activeNav === 'Purchase Entry' || activeNav === 'Old Purchase' || activeNav === 'Classic Purchase' || activeNav === 'Old Purchase Entry' ? (
-          /* PAGE 5: OLD PURCHASE (CLASSIC PURCHASE ENTRY) */
+          /* PAGE 5: OLD PURCHASE (SAME IMAGE 1 WORKSTATION + AUTHORIZED EDITING & NEGATIVE QTY ADJUSTMENT) */
           <div className="flex-1 flex flex-col w-full h-full min-h-0 overflow-hidden">
             <PurchaseEntryPage
               products={products}
               suppliers={suppliers}
               purchases={purchases}
+              branding={branding}
+              currentUser={currentUser}
+              currentDevice={currentDevice}
               onSavePurchase={handleSavePurchase}
               onDeletePurchase={handleDeletePurchase}
               onDeleteAllPurchases={handleDeleteAllPurchases}
@@ -2145,6 +2381,7 @@ export default function App() {
           /* PAGE 13: EXPENSES TRACKER */
           <ExpensesPage
             expenses={expenses}
+            branding={branding}
             onSaveExpense={handleSaveExpense}
             onDeleteExpense={handleDeleteExpense}
             onDeleteAllExpenses={handleDeleteAllExpenses}
@@ -2157,6 +2394,7 @@ export default function App() {
             purchaseReturns={purchaseReturns}
             suppliers={suppliers}
             products={products}
+            branding={branding}
             onSavePurchaseReturn={handleSavePurchaseReturn}
             onDeletePurchaseReturn={handleDeletePurchaseReturn}
             onDeleteAllReturns={handleDeleteAllPurchaseReturns}
@@ -2166,6 +2404,7 @@ export default function App() {
           /* PAGE 18: ALL STAFF MANAGEMENT */
           <AllStaffPage
             staffList={staffList}
+            branding={branding}
             onSaveStaff={handleSaveStaff}
             onDeleteStaff={handleDeleteStaff}
             onDeleteAllStaff={handleDeleteAllStaff}
@@ -2212,6 +2451,7 @@ export default function App() {
               setIsReceiptOpen(true);
             }}
             onOpenReceiptDesigner={() => setIsReceiptDesignerOpen(true)}
+            onOpenPrinterSettings={() => setIsPrinterSettingsOpen(true)}
             onOpenResetSystem={() => setIsResetSystemOpen(true)}
             deferredPrompt={deferredPrompt}
             shopId={branding.terminalDeviceId || 'WM-001'}
@@ -2222,7 +2462,7 @@ export default function App() {
       {/* ============================================================== */}
       {/* 3. MOBILE BOTTOM NAVIGATION BAR (MATCHING MOBILE REFERENCE)    */}
       {/* ============================================================== */}
-      {!isNewSalePage && !isOldSalePage && (
+      {!isNewSalePage && !isOldSalePage && !isPurchaseWorkstationPage && (
         <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 h-16 flex items-center justify-around px-2 shadow-lg">
           {/* 1. HOME */}
           <button
@@ -2383,6 +2623,7 @@ export default function App() {
         transaction={currentTransaction}
         storeBranding={branding}
         receiptSettings={receiptSettings}
+        onOpenPrinterSettings={() => setIsPrinterSettingsOpen(true)}
         onSaveReceiptSettings={(updated) => {
           setReceiptSettings(updated);
           showToast('رسید کی ترتیبات کامیابی سے محفوظ ہو گئیں! (Receipt settings saved)', 'success');
@@ -2419,9 +2660,24 @@ export default function App() {
           setIsSettingsOpen(false);
           setIsReceiptDesignerOpen(true);
         }}
+        onOpenPrinterSettings={() => {
+          setIsSettingsOpen(false);
+          setIsPrinterSettingsOpen(true);
+        }}
         onOpenResetSystem={() => {
           setIsSettingsOpen(false);
           setIsResetSystemOpen(true);
+        }}
+      />
+
+      {/* Complete Printer Settings Modal */}
+      <PrinterSettingsModal
+        isOpen={isPrinterSettingsOpen}
+        onClose={() => setIsPrinterSettingsOpen(false)}
+        branding={branding}
+        onSettingsUpdated={(updated) => {
+          setPrinterSettings(updated);
+          syncService.syncPrinterSettings(updated);
         }}
       />
 

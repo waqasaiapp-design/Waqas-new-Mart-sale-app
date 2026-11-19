@@ -94,6 +94,7 @@ export interface HomePageProps {
   onOpenConnectNewQr?: () => void;
   onOpenPairThisDevice?: () => void;
   onOpenReceiptDesigner?: () => void;
+  onOpenPrinterSettings?: () => void;
   onOpenResetSystem?: () => void;
   shopId?: string;
   deferredPrompt?: BeforeInstallPromptEvent | null;
@@ -122,6 +123,7 @@ export const HomePage: React.FC<HomePageProps> = ({
   onOpenConnectNewQr,
   onOpenPairThisDevice,
   onOpenReceiptDesigner,
+  onOpenPrinterSettings,
   onOpenResetSystem,
   shopId = 'WM-001',
   deferredPrompt,
@@ -656,6 +658,20 @@ export const HomePage: React.FC<HomePageProps> = ({
                 <Settings className="w-4 h-4 text-blue-400" />
                 <span>Store Branding Settings</span>
               </button>
+
+              {onOpenPrinterSettings && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileDropdownOpen(false);
+                    onOpenPrinterSettings();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-slate-200 hover:text-white hover:bg-slate-800 font-semibold cursor-pointer"
+                >
+                  <Printer className="w-4 h-4 text-emerald-400" />
+                  <span>Printer Settings (پرنٹر سیٹنگز)</span>
+                </button>
+              )}
 
               <button
                 type="button"

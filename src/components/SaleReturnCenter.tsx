@@ -23,6 +23,11 @@ import { Product, SaleTransaction, SaleReturn, SaleReturnItem, Customer } from '
 import { formatRs } from '../data/defaultProducts';
 import { WaqasBrandingCard } from './WaqasBrandingCard';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
+import {
+  buildPrintableHtmlDocument,
+  loadPrinterSettings,
+  printHtmlDocument,
+} from '../utils/printerService';
 
 interface SaleReturnCenterProps {
   products: Product[];
@@ -47,6 +52,7 @@ export const SaleReturnCenter: React.FC<SaleReturnCenterProps> = ({
 }) => {
   // Navigation inside Return Center: 'new' | 'history'
   const [activeTab, setActiveTab] = useState<'new' | 'history'>('new');
+  const [returnPrintFeedback, setReturnPrintFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Search invoice state
   const [invoiceSearchQuery, setInvoiceSearchQuery] = useState('');
@@ -1051,18 +1057,65 @@ export const SaleReturnCenter: React.FC<SaleReturnCenterProps> = ({
               </div>
             </div>
 
+            {returnPrintFeedback && (
+              <div
+                className={`mx-4 mb-2 px-3 py-2 rounded-lg border text-xs font-bold ${
+                  returnPrintFeedback.ok
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-red-50 border-red-200 text-red-700'
+                }`}
+              >
+                {returnPrintFeedback.text}
+              </div>
+            )}
+
             {/* Print & Close Buttons */}
             <div className="p-3 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2 print:hidden">
               <button
                 type="button"
-                onClick={() => setPrintedReturn(null)}
+                onClick={() => {
+                  setReturnPrintFeedback(null);
+                  setPrintedReturn(null);
+                }}
                 className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
               >
                 Close
               </button>
               <button
                 type="button"
-                onClick={() => window.print()}
+                onClick={async () => {
+                  if (!printedReturn) return;
+                  const settings = loadPrinterSettings();
+                  const rows = printedReturn.items
+                    .map(
+                      (it) =>
+                        `<tr><td>${it.productName}</td><td class="text-center num">${it.quantity}</td><td class="text-right num">${formatRs(it.unitPrice)}</td><td class="text-right num">${formatRs(it.total)}</td></tr>`
+                    )
+                    .join('');
+                  const body = `
+                    <div class="header-box">
+                      <h1 class="store-title">WAQAS MART</h1>
+                      <span class="doc-badge">OFFICIAL SALE RETURN MEMO</span>
+                    </div>
+                    <div class="meta-grid">
+                      <div><div class="meta-label">Return Memo #</div><div class="meta-value">${printedReturn.returnNumber}</div></div>
+                      <div><div class="meta-label">Orig Invoice #</div><div class="meta-value">${printedReturn.originalInvoiceNumber}</div></div>
+                      <div><div class="meta-label">Customer</div><div class="meta-value">${printedReturn.customerName}</div></div>
+                      <div><div class="meta-label">Date</div><div class="meta-value">${printedReturn.dateTime}</div></div>
+                    </div>
+                    <table><thead><tr><th>Item</th><th class="text-center">Qty</th><th class="text-right">Rate</th><th class="text-right">Total</th></tr></thead><tbody>${rows}</tbody></table>
+                    <div class="summary-box">
+                      <div class="summary-row"><span>Refund Method:</span><strong>${printedReturn.refundMethod.toUpperCase()}</strong></div>
+                      <div class="summary-row grand-row"><span>TOTAL REFUND:</span><span>${formatRs(printedReturn.totalRefund)}</span></div>
+                    </div>
+                  `;
+                  const docHtml = buildPrintableHtmlDocument(body, {
+                    paperSize: settings.defaultReceiptSize || '80mm',
+                    title: `Return Memo ${printedReturn.returnNumber}`,
+                  });
+                  const res = await printHtmlDocument(docHtml);
+                  setReturnPrintFeedback({ ok: res.ok, text: res.message });
+                }}
                 className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 cursor-pointer"
               >
                 <Printer className="w-3.5 h-3.5" />

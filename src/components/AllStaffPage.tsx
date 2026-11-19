@@ -1,32 +1,28 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Users,
   Plus,
   Search,
-  Filter,
-  Phone,
-  Calendar,
-  DollarSign,
-  Briefcase,
-  CheckCircle2,
-  XCircle,
-  Clock,
   Printer,
   Trash2,
   Edit2,
   X,
-  UserCheck,
-  Shield,
-  FileText,
-  BadgeCheck,
+  CheckCircle2,
+  DollarSign,
+  Camera,
+  Upload,
+  AlertCircle,
+  User as UserIcon,
 } from 'lucide-react';
-import { StaffMember, StaffSalaryPayment } from '../types/pos';
+import { StaffMember, StaffSalaryPayment, StoreBranding } from '../types/pos';
 import { formatRs } from '../data/defaultProducts';
 import { WaqasDualProfileCards } from './WaqasDualProfileCards';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
+import { printStaffDirectoryReport } from '../utils/printerService';
 
 interface AllStaffPageProps {
   staffList: StaffMember[];
+  branding?: StoreBranding;
   onSaveStaff: (staff: StaffMember) => void;
   onDeleteStaff: (staffId: string) => void;
   onDeleteAllStaff?: () => void;
@@ -35,6 +31,7 @@ interface AllStaffPageProps {
 
 export const AllStaffPage: React.FC<AllStaffPageProps> = ({
   staffList,
+  branding,
   onSaveStaff,
   onDeleteStaff,
   onDeleteAllStaff,
@@ -42,11 +39,13 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
 }) => {
   const [selectedStaffId, setSelectedStaffId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState<string>('ALL');
+  const [roleFilter] = useState<string>('ALL');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isPaySalaryModalOpen, setIsPaySalaryModalOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [printFeedback, setPrintFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
 
   // Form Fields
   const [name, setName] = useState('');
@@ -61,17 +60,131 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
   const [shift, setShift] = useState<StaffMember['shift']>('Morning');
   const [accountStatus, setAccountStatus] = useState<StaffMember['accountStatus']>('active');
   const [notes, setNotes] = useState('');
+  const [photoUrl, setPhotoUrl] = useState('');
+
+  // Camera / File upload refs & state
+  const photoUploadRef = useRef<HTMLInputElement>(null);
+  const cameraFileRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
   // Salary Payment State
   const [salaryPayAmount, setSalaryPayAmount] = useState('');
   const [salaryMonth, setSalaryMonth] = useState(
     new Date().toLocaleDateString('en-PK', { month: 'long', year: 'numeric' })
   );
-  const [salaryPayMethod, setSalaryPayMethod] = useState('Cash');
+  const [salaryPayMethod] = useState('Cash');
 
   const showToast = (msg: string) => {
     setFeedbackMsg(msg);
     setTimeout(() => setFeedbackMsg(null), 3000);
+  };
+
+  const stopCameraStream = () => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((t) => t.stop());
+      cameraStreamRef.current = null;
+    }
+    setIsCameraOpen(false);
+    setCameraError(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, []);
+
+  const compressImageToDataUrl = (srcUrl: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 420;
+        const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.82));
+        } else {
+          resolve(srcUrl);
+        }
+      };
+      img.onerror = () => resolve(srcUrl);
+      img.src = srcUrl;
+    });
+  };
+
+  const handlePhotoFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const raw = ev.target?.result;
+      if (typeof raw === 'string') {
+        const compressed = await compressImageToDataUrl(raw);
+        setPhotoUrl(compressed);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleOpenCamera = async () => {
+    setCameraError(null);
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      cameraFileRef.current?.click();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+      cameraStreamRef.current = stream;
+      setIsCameraOpen(true);
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      }, 60);
+    } catch {
+      // Fallback to native mobile camera picker if browser permission/hardware isn't exposed via getUserMedia
+      cameraFileRef.current?.click();
+    }
+  };
+
+  const handleCaptureFromCamera = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const canvas = document.createElement('canvas');
+    const vw = video.videoWidth || 480;
+    const vh = video.videoHeight || 480;
+    const scale = Math.min(1, 420 / Math.max(vw, vh));
+    canvas.width = Math.max(1, Math.round(vw * scale));
+    canvas.height = Math.max(1, Math.round(vh * scale));
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      setPhotoUrl(canvas.toDataURL('image/jpeg', 0.84));
+    }
+    stopCameraStream();
+  };
+
+  const handlePrintStaffList = async () => {
+    setIsPrinting(true);
+    setPrintFeedback(null);
+    const result = await printStaffDirectoryReport(filteredStaff, branding);
+    setIsPrinting(false);
+    setPrintFeedback({ type: result.ok ? 'success' : 'error', message: result.message });
+    setTimeout(() => setPrintFeedback(null), 5000);
   };
 
   const selectedStaff = staffList.find((s) => s.id === selectedStaffId) || null;
@@ -104,6 +217,7 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
     setShift('Morning');
     setAccountStatus('active');
     setNotes('');
+    setPhotoUrl('');
     setIsAddModalOpen(true);
   };
 
@@ -121,6 +235,7 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
     setShift(st.shift);
     setAccountStatus(st.accountStatus);
     setNotes(st.notes || '');
+    setPhotoUrl(st.photoUrl || '');
     setIsAddModalOpen(true);
   };
 
@@ -142,6 +257,7 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
       username: username.trim() || name.toLowerCase().replace(/\s+/g, ''),
       accountStatus,
       shift,
+      photoUrl: photoUrl || undefined,
       notes: notes.trim() || undefined,
       permissions: editingStaff?.permissions || {
         canEditPrice: role === 'Manager',
@@ -201,11 +317,13 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
         actions={
           <div className="flex items-center gap-2">
             <button
-              onClick={() => window.print()}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+              type="button"
+              disabled={isPrinting}
+              onClick={handlePrintStaffList}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Print List</span>
+              <span>{isPrinting ? 'Printing...' : 'Print List'}</span>
             </button>
             <button
               onClick={handleOpenAdd}
@@ -219,11 +337,32 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
       />
 
       <div className="flex-1 min-h-0 flex flex-col p-3 sm:p-5 lg:p-6 w-full space-y-4 overflow-y-auto">
-        {/* Toast Feedback */}
+        {/* Toast & Print Feedback */}
         {feedbackMsg && (
           <div className="fixed top-4 right-4 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-bold animate-in fade-in">
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
             <span>{feedbackMsg}</span>
+          </div>
+        )}
+        {printFeedback && (
+          <div
+            className={`px-4 py-2.5 rounded-2xl border flex items-center justify-between gap-2 text-xs font-bold ${
+              printFeedback.type === 'success'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {printFeedback.type === 'error' ? (
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              )}
+              <span>{printFeedback.message}</span>
+            </div>
+            <button type="button" onClick={() => setPrintFeedback(null)} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+              <X className="w-4 h-4" />
+            </button>
           </div>
         )}
 
@@ -250,11 +389,13 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => window.print()}
-            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+            type="button"
+            disabled={isPrinting}
+            onClick={handlePrintStaffList}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <Printer className="w-4 h-4" />
-            <span>Print List</span>
+            <span>{isPrinting ? 'Printing...' : 'Print List'}</span>
           </button>
 
           <button
@@ -345,9 +486,17 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
 
           {/* Profile Card */}
           <div className="bg-gradient-to-r from-sky-900 to-slate-900 text-white p-5 rounded-2xl shadow-sm flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-14 h-14 rounded-2xl bg-white/10 border-2 border-sky-400 flex items-center justify-center text-xl font-black text-white">
-                {selectedStaff.name.slice(0, 2).toUpperCase()}
+            <div className="flex items-center gap-3.5">
+              <div className="w-16 h-16 rounded-2xl bg-white/10 border-2 border-sky-400 flex items-center justify-center text-xl font-black text-white overflow-hidden shrink-0">
+                {selectedStaff.photoUrl ? (
+                  <img
+                    src={selectedStaff.photoUrl}
+                    alt={selectedStaff.name}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  selectedStaff.name.slice(0, 2).toUpperCase()
+                )}
               </div>
               <div>
                 <span className="text-[10px] font-black uppercase text-sky-300">
@@ -462,7 +611,22 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
                       <td className="py-3 px-3.5 font-mono font-bold text-sky-700">
                         {st.employeeId}
                       </td>
-                      <td className="py-3 px-3 font-bold text-slate-900">{st.name}</td>
+                      <td className="py-3 px-3 font-bold text-slate-900">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-sky-100 border border-sky-200 flex items-center justify-center overflow-hidden shrink-0 text-sky-800 font-black text-xs">
+                            {st.photoUrl ? (
+                              <img
+                                src={st.photoUrl}
+                                alt={st.name}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              st.name.slice(0, 2).toUpperCase()
+                            )}
+                          </div>
+                          <span>{st.name}</span>
+                        </div>
+                      </td>
                       <td className="py-3 px-3">
                         <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-50 text-sky-800 border border-sky-200">
                           {st.role}
@@ -486,15 +650,31 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
                         </span>
                       </td>
                       <td className="py-3 px-3 text-center">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedStaffId(st.id);
-                          }}
-                          className="px-2.5 py-1 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 rounded-lg text-xs font-bold"
-                        >
-                          View Profile 👉
-                        </button>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedStaffId(st.id);
+                            }}
+                            className="px-2.5 py-1 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 rounded-lg text-xs font-bold cursor-pointer"
+                          >
+                            View Profile
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (window.confirm(`Delete staff member "${st.name}"?`)) {
+                                onDeleteStaff(st.id);
+                              }
+                            }}
+                            className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg cursor-pointer"
+                            title="Delete Staff"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -525,6 +705,76 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
             </div>
 
             <form onSubmit={handleSaveStaffMember} className="space-y-3 text-xs">
+              {/* Optional Staff Profile Picture Section */}
+              <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-800">
+                    Staff Profile Picture (ملازم کی تصویر - اختیاری)
+                  </span>
+                  <span className="text-[10px] font-semibold text-slate-500">Optional</span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3.5">
+                  <div className="w-20 h-20 rounded-2xl bg-white border-2 border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-xs">
+                    {photoUrl ? (
+                      <img src={photoUrl} alt="Staff preview" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-slate-400">
+                        <UserIcon className="w-8 h-8" />
+                        <span className="text-[9px] font-bold mt-0.5">Avatar</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex-1 min-w-[180px] flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => photoUploadRef.current?.click()}
+                      className="px-3 py-2 bg-white hover:bg-sky-50 text-sky-800 border border-sky-200 rounded-xl font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{photoUrl ? 'Change Picture' : 'Upload Picture'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenCamera}
+                      className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>Take Picture</span>
+                    </button>
+
+                    {photoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setPhotoUrl('')}
+                        className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-xl font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Remove</span>
+                      </button>
+                    )}
+
+                    <input
+                      ref={photoUploadRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handlePhotoFileSelected}
+                      className="hidden"
+                    />
+                    <input
+                      ref={cameraFileRef}
+                      type="file"
+                      accept="image/*"
+                      capture="user"
+                      onChange={handlePhotoFileSelected}
+                      className="hidden"
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Full Name *</label>
@@ -635,6 +885,57 @@ export const AllStaffPage: React.FC<AllStaffPageProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Live Camera Snapshot Modal */}
+      {isCameraOpen && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl border border-slate-200">
+            <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Camera className="w-4 h-4 text-emerald-400" />
+                <h3 className="font-bold text-sm">Take Staff Photo</h3>
+              </div>
+              <button
+                type="button"
+                onClick={stopCameraStream}
+                className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-3 bg-slate-950">
+              {cameraError ? (
+                <div className="p-3 rounded-xl bg-red-950 text-red-200 text-xs">{cameraError}</div>
+              ) : (
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full rounded-2xl bg-black max-h-72 object-cover"
+                />
+              )}
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={stopCameraStream}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-200 text-xs font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCaptureFromCamera}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>Capture Photo</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

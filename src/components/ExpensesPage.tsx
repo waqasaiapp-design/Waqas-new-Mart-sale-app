@@ -24,13 +24,15 @@ import {
   Wrench,
   HelpCircle,
 } from 'lucide-react';
-import { ExpenseEntry, ExpenseCategory } from '../types/pos';
+import { ExpenseEntry, ExpenseCategory, StoreBranding } from '../types/pos';
 import { formatRs } from '../data/defaultProducts';
 import { WaqasDualProfileCards } from './WaqasDualProfileCards';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
+import { printExpenseReport } from '../utils/printerService';
 
 interface ExpensesPageProps {
   expenses: ExpenseEntry[];
+  branding?: StoreBranding;
   onSaveExpense: (expense: ExpenseEntry) => void;
   onDeleteExpense: (expenseId: string) => void;
   onDeleteAllExpenses?: () => void;
@@ -40,6 +42,7 @@ interface ExpensesPageProps {
 
 export const ExpensesPage: React.FC<ExpensesPageProps> = ({
   expenses,
+  branding,
   onSaveExpense,
   onDeleteExpense,
   onDeleteAllExpenses,
@@ -51,6 +54,8 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<ExpenseEntry | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printFeedback, setPrintFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Form Fields
   const [date, setDate] = useState(new Date().toLocaleDateString('en-GB'));
@@ -171,6 +176,15 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
     showToast(editingExpense ? 'Expense updated successfully!' : 'New expense recorded successfully!');
   };
 
+  const handlePrintExpenses = async () => {
+    setIsPrinting(true);
+    setPrintFeedback(null);
+    const label = selectedCategory === 'ALL' ? 'All Categories' : selectedCategory;
+    const res = await printExpenseReport(filteredExpenses, label, branding);
+    setPrintFeedback({ ok: res.ok, text: res.message });
+    setIsPrinting(false);
+  };
+
   return (
     <div className="flex-1 min-h-full w-full bg-[#f8fafc] text-slate-900 flex flex-col font-sans">
       <FullScreenPageHeader
@@ -182,11 +196,13 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
         actions={
           <div className="flex items-center gap-2">
             <button
-              onClick={() => window.print()}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+              type="button"
+              onClick={handlePrintExpenses}
+              disabled={isPrinting}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Print Report</span>
+              <span>{isPrinting ? 'Printing...' : 'Print Report'}</span>
             </button>
             <button
               onClick={handleOpenAdd}
@@ -200,6 +216,19 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
       />
 
       <div className="flex-1 min-h-0 flex flex-col p-3 sm:p-5 lg:p-6 w-full space-y-4 overflow-y-auto">
+        {printFeedback && (
+          <div
+            className={`px-4 py-2.5 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 ${
+              printFeedback.ok
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-red-50 border-red-200 text-red-700'
+            }`}
+          >
+            <span>{printFeedback.text}</span>
+            <button type="button" onClick={() => setPrintFeedback(null)} className="font-black cursor-pointer">×</button>
+          </div>
+        )}
+
         {/* Toast Feedback */}
         {feedbackMsg && (
           <div className="fixed top-4 right-4 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-bold animate-in fade-in">
@@ -231,11 +260,13 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => window.print()}
-            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+            type="button"
+            onClick={handlePrintExpenses}
+            disabled={isPrinting}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <Printer className="w-4 h-4" />
-            <span>Print Report</span>
+            <span>{isPrinting ? 'Printing...' : 'Print Report'}</span>
           </button>
 
           <button
