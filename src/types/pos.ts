@@ -231,7 +231,7 @@ export interface UserProfile {
   displayName: string;
   email?: string;
   phone?: string;
-  role: 'Master Admin' | 'Store Manager' | 'Head Cashier' | 'Cashier';
+  role: 'Master Admin' | 'Store Manager' | 'Head Cashier' | 'Cashier' | 'Shop Owner' | UserRole;
   avatarUrl?: string;
   createdAt: string;
 }
@@ -247,6 +247,7 @@ export interface DeviceInfo {
   firstRegistered: string;
   lastActive: string;
   status: 'active' | 'pending' | 'revoked';
+  shopId?: string;
   ipAddress?: string;
   connectionState?: 'online' | 'offline';
 }
@@ -336,6 +337,7 @@ export interface CandidateDevice {
 export interface PairingSession {
   pairingToken: string;
   manualCode: string;
+  shopId?: string;
   createdAt: number;
   expiresAt: number;
   status: 'pending_scan' | 'pending_approval' | 'approved' | 'rejected' | 'expired' | 'cancelled';
@@ -353,10 +355,18 @@ export type SyncEventType =
   | 'purchase_return:processed'
   | 'stock:updated'
   | 'customer:ledger_updated'
+  | 'supplier:ledger_updated'
+  | 'expenses:updated'
+  | 'staff:updated'
+  | 'daily_hisab:updated'
+  | 'categories:updated'
+  | 'printer:updated'
+  | 'receipt:updated'
   | 'device:updated'
   | 'device:revoked'
   | 'device:pairing_request'
   | 'device:approved'
+  | 'auth:shop_restricted'
   | 'ping';
 
 export interface SyncEvent {
@@ -364,6 +374,36 @@ export interface SyncEvent {
   sourceDeviceId?: string;
   timestamp: number;
   payload?: any;
+}
+
+export interface QueuedMutation {
+  opId: string;
+  action: string;
+  payload: any;
+  timestamp: number;
+  baseSyncVersion?: number;
+  retryCount: number;
+  lastError?: string;
+}
+
+export interface SyncConflict {
+  id: string;
+  action: string;
+  message: string;
+  timestamp: number;
+  localPayload?: any;
+  serverVersion?: number;
+}
+
+export interface SyncStatusSnapshot {
+  networkStatus: NetworkStatus;
+  isOnline: boolean;
+  sseConnected: boolean;
+  pendingCount: number;
+  conflicts: SyncConflict[];
+  lastSyncTime: string;
+  syncVersion: number;
+  isRevoked: boolean;
 }
 
 export interface StoreFullState {
@@ -382,6 +422,11 @@ export interface StoreFullState {
   expenses?: ExpenseEntry[];
   staffList?: StaffMember[];
   printerSettings?: PrinterSettings;
+  categories?: CategoryInfo[];
+  dailyHisab?: Record<string, Record<string, Partial<DailyHisabRow>>>;
+  receiptSettings?: ReceiptSettings;
+  syncVersion?: number;
+  lastUpdated?: string;
 }
 
 export type ReceiptPaperSize = '58mm' | '80mm' | 'a4';
@@ -549,16 +594,7 @@ export interface PurchaseReturn {
   createdAt: string;
 }
 
-// 4. SECURITY SETTINGS & APP LOCK
-export interface SecurityConfig {
-  appLockEnabled: boolean;
-  biometricEnabled: boolean;
-  pinCode: string; // 4-digit PIN
-  autoLockSeconds: number; // 0 = disabled, 60 = 1 min, 180 = 3 min, 300 = 5 min
-  lockOnBackground: boolean;
-  restrictSensitiveActions: boolean;
-  lastUnlockedAt?: number;
-}
+// 4. SECURITY AUDIT SUMMARY (NO LOCAL PIN/FINGERPRINT LOCKS)
 
 // 5. CCTV DVR / NVR & IP CAMERAS
 export interface CctvCamera {
@@ -601,6 +637,51 @@ export interface StaffAttendanceRecord {
   checkOut?: string;
 }
 
+export interface StaffModulePermissions {
+  newSale: boolean;
+  oldSale: boolean;
+  newPurchase: boolean;
+  oldPurchase: boolean;
+  stock: boolean;
+  products: boolean;
+  customers: boolean;
+  suppliers: boolean;
+  expenses: boolean;
+  reports: boolean;
+  printing: boolean;
+  settings: boolean;
+  // Granular action & sensitive visibility permissions
+  canEditPrice: boolean;
+  canGiveDiscount: boolean;
+  canDeleteItems: boolean;
+  canAccessReports: boolean;
+  canAccessSettings: boolean;
+  canAccessLedgers: boolean;
+  canViewCostAndProfit: boolean;
+}
+
+export const DEFAULT_STAFF_PERMISSIONS: StaffModulePermissions = {
+  newSale: true,
+  oldSale: true,
+  newPurchase: false,
+  oldPurchase: false,
+  stock: true,
+  products: false,
+  customers: true,
+  suppliers: false,
+  expenses: false,
+  reports: false,
+  printing: true,
+  settings: false,
+  canEditPrice: false,
+  canGiveDiscount: false,
+  canDeleteItems: false,
+  canAccessReports: false,
+  canAccessSettings: false,
+  canAccessLedgers: false,
+  canViewCostAndProfit: false,
+};
+
 export interface StaffMember {
   id: string;
   employeeId: string; // e.g. "WM-EMP-001"
@@ -617,14 +698,7 @@ export interface StaffMember {
   accountStatus: 'active' | 'suspended' | 'resigned';
   shift: 'Morning' | 'Evening' | 'Full Day' | 'Night';
   notes?: string;
-  permissions: {
-    canEditPrice: boolean;
-    canGiveDiscount: boolean;
-    canDeleteItems: boolean;
-    canAccessReports: boolean;
-    canAccessSettings: boolean;
-    canAccessLedgers: boolean;
-  };
+  permissions: StaffModulePermissions;
   salaryPayments?: StaffSalaryPayment[];
   attendance?: StaffAttendanceRecord[];
   createdAt: string;
@@ -707,37 +781,56 @@ export interface SubscriptionRenewalRecord {
 }
 
 // ==============================================================
-// 8. MULTI-TENANT AUTHENTICATION, ROLES & AUDIT LOGS
+// 8. MULTI-TENANT AUTHENTICATION, SUPER ADMIN, ROLES & AUDIT LOGS
 // ==============================================================
-export type UserRole = 'MASTER_ADMIN' | 'SHOP_OWNER' | 'STAFF';
+export type UserRole = 'SUPER_ADMIN' | 'SHOP_OWNER' | 'STAFF';
 
-export interface MasterAdminProfile {
+export interface SuperAdminAccount {
   id: string;
-  username: string;
+  gmail: string;
+  googleSub?: string;
+  mobile?: string;
   fullName: string;
-  phone?: string;
-  whatsapp?: string;
+  status: 'active';
+  verifiedGmail: boolean;
+  verifiedMobile?: boolean;
   createdAt: string;
   lastLoginAt?: string;
 }
 
-export interface MasterAdminStatus {
-  isConfigured: boolean;
-  masterAdminUsername?: string;
-  totalShops: number;
-  activeShops: number;
+export interface BootstrapAuthStatus {
+  superAdminConfigured: boolean;
+  superAdminSetupLocked?: boolean;
+  firebaseGoogleAuthConfigured?: boolean;
+  googleOAuthConfigured?: boolean;
+  googleRedirectUris?: {
+    dev: string;
+    shared: string;
+  };
+  maskedGmail?: string;
+  maskedMobile?: string;
+  otpDeliveryConfigured?: {
+    email: boolean;
+    sms: boolean;
+  };
 }
 
 export interface AuthUser {
   id: string;
   email?: string;
+  gmail?: string;
   username?: string;
   fullName: string;
   phone?: string;
+  mobile?: string;
   whatsapp?: string;
   role: UserRole;
   shopId?: string;
   shopName?: string;
+  staffId?: string;
+  permissions?: StaffModulePermissions;
+  verifiedGmail?: boolean;
+  verifiedMobile?: boolean;
   mustChangePasswordOnFirstLogin?: boolean;
   createdAt: string;
 }
@@ -746,6 +839,7 @@ export interface AuthSession {
   token: string;
   user: AuthUser;
   shop?: ShopAccount;
+  expiresAt?: string;
 }
 
 export interface AuditLogEntry {

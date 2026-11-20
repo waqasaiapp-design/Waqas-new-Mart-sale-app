@@ -24,6 +24,8 @@ interface PurchaseEntryPageProps {
   onOpenScanner?: () => void;
   onNavigate?: (page: string) => void;
   onBackToHome?: () => void;
+  scannedBarcode?: string | null;
+  onClearScannedBarcode?: () => void;
 }
 
 export const PurchaseEntryPage: React.FC<PurchaseEntryPageProps> = ({
@@ -41,6 +43,8 @@ export const PurchaseEntryPage: React.FC<PurchaseEntryPageProps> = ({
   onOpenScanner,
   onNavigate,
   onBackToHome,
+  scannedBarcode = null,
+  onClearScannedBarcode,
 }) => {
   return (
     <PurchaseWorkstation
@@ -59,6 +63,8 @@ export const PurchaseEntryPage: React.FC<PurchaseEntryPageProps> = ({
       onOpenScanner={onOpenScanner}
       onNavigate={onNavigate}
       onBackToHome={onBackToHome}
+      scannedBarcode={scannedBarcode}
+      onClearScannedBarcode={onClearScannedBarcode}
     />
   );
 };

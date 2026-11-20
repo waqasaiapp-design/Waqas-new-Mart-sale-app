@@ -30,12 +30,14 @@ import {
   runTestPrint,
   savePrinterSettings,
 } from '../utils/printerService';
+import { FullScreenPageHeader } from './FullScreenPageHeader';
 
 interface PrinterSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   branding?: StoreBranding;
   onSettingsUpdated?: (settings: PrinterSettings) => void;
+  asPage?: boolean;
 }
 
 export const PrinterSettingsModal: React.FC<PrinterSettingsModalProps> = ({
@@ -43,6 +45,7 @@ export const PrinterSettingsModal: React.FC<PrinterSettingsModalProps> = ({
   onClose,
   branding,
   onSettingsUpdated,
+  asPage = false,
 }) => {
   const [settings, setSettings] = useState<PrinterSettings>(() => loadPrinterSettings());
   const [hwStatus, setHwStatus] = useState(() => getPrinterHardwareStatus());
@@ -142,8 +145,29 @@ export const PrinterSettingsModal: React.FC<PrinterSettingsModalProps> = ({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4 backdrop-blur-xs overflow-y-auto">
-      <div className="w-full max-w-4xl rounded-3xl bg-white shadow-2xl border border-slate-200 overflow-hidden my-auto flex flex-col max-h-[94vh]">
+    <div
+      className={
+        asPage
+          ? 'flex-1 min-h-full w-full bg-slate-50 flex flex-col font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 sm:p-4 backdrop-blur-xs overflow-y-auto'
+      }
+    >
+      {asPage && (
+        <FullScreenPageHeader
+          title="Printer Settings"
+          subtitle="58mm / 80mm تھرمل، A4 لیزر پرنٹر، بلیوٹوتھ، یو ایس بی اور وائی فائی سیٹنگز"
+          icon={<Printer className="w-5 h-5 text-emerald-600" />}
+          onBackToHome={onClose}
+          accentColor="emerald"
+        />
+      )}
+      <div
+        className={
+          asPage
+            ? 'w-full max-w-6xl mx-auto my-4 rounded-3xl bg-white shadow-sm border border-slate-200 overflow-hidden flex flex-col flex-1'
+            : 'w-full max-w-4xl rounded-3xl bg-white shadow-2xl border border-slate-200 overflow-hidden my-auto flex flex-col max-h-[94vh]'
+        }
+      >
         {/* Header */}
         <div className="px-5 py-4 bg-gradient-to-r from-[#064e3b] via-[#047857] to-[#0284c7] text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
@@ -159,13 +183,15 @@ export const PrinterSettingsModal: React.FC<PrinterSettingsModalProps> = ({
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-xl hover:bg-white/15 text-white cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!asPage && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-xl hover:bg-white/15 text-white cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Body */}

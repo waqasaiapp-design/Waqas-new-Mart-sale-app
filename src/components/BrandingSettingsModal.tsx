@@ -15,6 +15,7 @@ import {
   Camera,
   Lock,
   ExternalLink,
+  AlertCircle,
 } from 'lucide-react';
 import {
   StoreBranding,
@@ -25,6 +26,7 @@ import {
 } from '../types/pos';
 import { safeFetchJson } from '../utils/apiClient';
 import { WaqasDualProfileCards } from './WaqasDualProfileCards';
+import { FullScreenPageHeader } from './FullScreenPageHeader';
 
 interface BrandingSettingsModalProps {
   isOpen: boolean;
@@ -35,6 +37,7 @@ interface BrandingSettingsModalProps {
   onOpenPrinterSettings?: () => void;
   onOpenResetSystem?: () => void;
   currentUser?: UserProfile;
+  asPage?: boolean;
 }
 
 const DEFAULT_BRANDING: StoreBranding = {
@@ -69,10 +72,13 @@ export const BrandingSettingsModal: React.FC<BrandingSettingsModalProps> = ({
   onOpenPrinterSettings,
   onOpenResetSystem,
   currentUser,
+  asPage = false,
 }) => {
   // Navigation tabs
   const [activeTab, setActiveTab] = useState<'owner' | 'logo' | 'banner' | 'store' | 'appearance'>('owner');
   const [bannerUrl, setBannerUrl] = useState(branding.bannerUrl || '');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
   const bannerBgInputRef = useRef<HTMLInputElement>(null);
 
   // Role validation: Only Admin / Owner can edit profile settings
@@ -190,8 +196,9 @@ export const BrandingSettingsModal: React.FC<BrandingSettingsModalProps> = ({
 
   // Save All Changes (Mart Owner Profile + Store Branding)
   const handleSave = () => {
+    setErrorMsg(null);
     if (!isAdminOrOwner) {
-      alert('Only Admin / Owner users are authorized to modify settings. (صرف ایڈمن یا مالک یہ تبدیلیاں کر سکتے ہیں)');
+      setErrorMsg('Only Admin / Owner users are authorized to modify settings. (صرف ایڈمن یا مالک یہ تبدیلیاں کر سکتے ہیں)');
       return;
     }
 
@@ -255,33 +262,35 @@ export const BrandingSettingsModal: React.FC<BrandingSettingsModalProps> = ({
     onSaveBranding(updatedBranding);
     setSaveSuccessMsg('Mart Logo, Owner Profile & Store Settings saved successfully! (ترتیبات کامیابی سے محفوظ ہو گئیں)');
 
-    setTimeout(() => {
-      onClose();
-    }, 600);
+    if (!asPage) {
+      setTimeout(() => {
+        onClose();
+      }, 600);
+    }
   };
 
   const handleRestoreDefault = () => {
-    if (window.confirm('Restore default Mart Owner Profile and store branding? (کیا آپ بنیادی ترتیبات بحال کرنا چاہتے ہیں؟)')) {
-      setMartName(DEFAULT_MART_OWNER.martName);
-      setOwnerName(DEFAULT_MART_OWNER.ownerName);
-      setOwnerDesignation(DEFAULT_MART_OWNER.designation || 'Proprietor & Manager');
-      setOwnerMobile(DEFAULT_MART_OWNER.mobileNumber);
-      setOwnerWhatsapp(DEFAULT_MART_OWNER.whatsappNumber || '03228570782');
-      setOwnerAddress(DEFAULT_MART_OWNER.address || 'Commercial Market, Multan, Pakistan');
-      setMartPhotoUrl(DEFAULT_MART_OWNER.photoUrl);
+    setMartName(DEFAULT_MART_OWNER.martName);
+    setOwnerName(DEFAULT_MART_OWNER.ownerName);
+    setOwnerDesignation(DEFAULT_MART_OWNER.designation || 'Proprietor & Manager');
+    setOwnerMobile(DEFAULT_MART_OWNER.mobileNumber);
+    setOwnerWhatsapp(DEFAULT_MART_OWNER.whatsappNumber || '03228570782');
+    setOwnerAddress(DEFAULT_MART_OWNER.address || 'Commercial Market, Multan, Pakistan');
+    setMartPhotoUrl(DEFAULT_MART_OWNER.photoUrl);
 
-      setStoreName(DEFAULT_BRANDING.storeName);
-      setPrimaryName(DEFAULT_BRANDING.primaryName);
-      setAccentName(DEFAULT_BRANDING.accentName);
-      setSubtitle(DEFAULT_BRANDING.subtitle);
-      setLogoUrl('');
-      setSidebarPromoTitle(DEFAULT_BRANDING.sidebarPromoTitle!);
-      setSidebarPromoBadge(DEFAULT_BRANDING.sidebarPromoBadge!);
-      setBottomBannerTitle(DEFAULT_BRANDING.bottomBannerTitle!);
-      setBottomBannerSubtitle(DEFAULT_BRANDING.bottomBannerSubtitle!);
-      setTerminalDeviceId(DEFAULT_BRANDING.terminalDeviceId!);
-      setPrimaryColor(DEFAULT_BRANDING.primaryColor!);
-    }
+    setStoreName(DEFAULT_BRANDING.storeName);
+    setPrimaryName(DEFAULT_BRANDING.primaryName);
+    setAccentName(DEFAULT_BRANDING.accentName);
+    setSubtitle(DEFAULT_BRANDING.subtitle);
+    setLogoUrl('');
+    setSidebarPromoTitle(DEFAULT_BRANDING.sidebarPromoTitle!);
+    setSidebarPromoBadge(DEFAULT_BRANDING.sidebarPromoBadge!);
+    setBottomBannerTitle(DEFAULT_BRANDING.bottomBannerTitle!);
+    setBottomBannerSubtitle(DEFAULT_BRANDING.bottomBannerSubtitle!);
+    setTerminalDeviceId(DEFAULT_BRANDING.terminalDeviceId!);
+    setPrimaryColor(DEFAULT_BRANDING.primaryColor!);
+    setShowRestoreConfirm(false);
+    setSaveSuccessMsg('Default Mart Owner Profile & Branding restored in editor. Click Save Changes to apply.');
   };
 
   // Preview profile object for live preview
@@ -297,8 +306,29 @@ export const BrandingSettingsModal: React.FC<BrandingSettingsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 sm:p-4 backdrop-blur-xs overflow-y-auto">
-      <div className="w-full max-w-4xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden my-6 animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[92vh]">
+    <div
+      className={
+        asPage
+          ? 'flex-1 min-h-full w-full bg-[#f8fafc] flex flex-col font-sans'
+          : 'fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-3 sm:p-4 backdrop-blur-xs overflow-y-auto'
+      }
+    >
+      {asPage && (
+        <FullScreenPageHeader
+          title="Application Settings"
+          subtitle="WAQAS MART برانڈنگ، مالک پروفائل، تھیم کلر اور رسید ترتیبات"
+          icon={<Store className="w-5 h-5 text-emerald-600" />}
+          onBackToHome={onClose}
+          accentColor="emerald"
+        />
+      )}
+      <div
+        className={
+          asPage
+            ? 'w-full max-w-6xl mx-auto my-4 bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden flex flex-col flex-1'
+            : 'w-full max-w-4xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden my-6 animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[92vh]'
+        }
+      >
         {/* Header */}
         <div className="bg-[#051b3d] px-6 py-4 text-white flex items-center justify-between shrink-0 border-b border-blue-900/60">
           <div className="flex items-center gap-3">
@@ -317,12 +347,14 @@ export const BrandingSettingsModal: React.FC<BrandingSettingsModalProps> = ({
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!asPage && (
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Access Control Notice (When not Admin/Owner) */}
@@ -1054,6 +1086,14 @@ export const BrandingSettingsModal: React.FC<BrandingSettingsModalProps> = ({
             </div>
           )}
 
+          {/* Error message banner */}
+          {errorMsg && (
+            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-bold flex items-center gap-2 animate-in fade-in">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
           {/* Success message banner */}
           {saveSuccessMsg && (
             <div className="p-3 rounded-xl bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold flex items-center gap-2 animate-in fade-in">
@@ -1066,21 +1106,41 @@ export const BrandingSettingsModal: React.FC<BrandingSettingsModalProps> = ({
         {/* Footer Actions */}
         <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-            <button
-              type="button"
-              disabled={!isAdminOrOwner}
-              onClick={handleRestoreDefault}
-              className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
-              <span>Restore Defaults</span>
-            </button>
+            {showRestoreConfirm ? (
+              <div className="flex items-center gap-2 bg-amber-50 border border-amber-300 px-3 py-1.5 rounded-xl text-xs">
+                <span className="font-bold text-amber-900">Restore defaults?</span>
+                <button
+                  type="button"
+                  onClick={handleRestoreDefault}
+                  className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold cursor-pointer"
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowRestoreConfirm(false)}
+                  className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={!isAdminOrOwner}
+                onClick={() => setShowRestoreConfirm(true)}
+                className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                <span>Restore Defaults</span>
+              </button>
+            )}
 
             {onOpenResetSystem && isAdminOrOwner && (
               <button
                 type="button"
                 onClick={() => {
-                  onClose();
+                  if (!asPage) onClose();
                   onOpenResetSystem();
                 }}
                 className="px-3.5 py-2.5 rounded-xl bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"

@@ -1,5 +1,5 @@
 // Service Worker for WAQAS MART Supermarket POS
-const CACHE_NAME = 'waqas-mart-cache-v5';
+const CACHE_NAME = 'waqas-mart-cache-v7';
 const STATIC_ASSETS = [
   '/manifest.json',
   '/manifest.webmanifest',
@@ -37,7 +37,12 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET' || event.request.url.includes('/api/')) {
+  if (
+    event.request.method !== 'GET' ||
+    event.request.url.includes('/api/') ||
+    event.request.url.includes('/download') ||
+    event.request.url.endsWith('.zip')
+  ) {
     return;
   }
 

@@ -231,9 +231,16 @@ export const PairDeviceModal: React.FC<PairDeviceModalProps> = ({
           clearInterval(pollTimerRef.current);
           setIsWaitingForApproval(false);
 
-          // Save session token in syncService
+          // Save approved device sessionToken & shopId in syncService
           if (data.auth.sessionToken) {
             syncService.setSessionToken(data.auth.sessionToken);
+          }
+          if (data.auth.device?.shopId) {
+            const dev = syncService.getDevice();
+            dev.shopId = data.auth.device.shopId;
+            try {
+              localStorage.setItem('waqas_mart_device_info_v2', JSON.stringify(dev));
+            } catch {}
           }
 
           confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });

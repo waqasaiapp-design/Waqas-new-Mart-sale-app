@@ -58,6 +58,9 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [isNewReturnModalOpen, setIsNewReturnModalOpen] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
+  const [returnToDeleteId, setReturnToDeleteId] = useState<string | null>(null);
   const [isPrinting, setIsPrinting] = useState(false);
   const [printFeedback, setPrintFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -93,6 +96,7 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
 
   // Open modal
   const handleOpenNewReturn = () => {
+    setFormError(null);
     setSelectedPurchaseId(purchases.length > 0 ? purchases[0].id : '');
     setSelectedItemsToReturn({});
     setRefundType('reduce_payable');
@@ -103,8 +107,9 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
   // Submit Purchase Return
   const handleSubmitReturn = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     if (!selectedPurchase) {
-      alert('Please select a purchase invoice to return.');
+      setFormError('Please select a purchase invoice to return.');
       return;
     }
 
@@ -115,7 +120,7 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
       if (draft && draft.quantity > 0) {
         // Enforce: cannot return more than purchased quantity
         if (draft.quantity > it.quantity) {
-          alert(
+          setFormError(
             `Error: Cannot return ${draft.quantity} units for "${it.productName}". Max purchased quantity was ${it.quantity}.`
           );
           return;
@@ -134,7 +139,7 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
     }
 
     if (itemsToSave.length === 0) {
-      alert('Please enter a return quantity for at least one product.');
+      setFormError('Please enter a return quantity for at least one product.');
       return;
     }
 
@@ -290,21 +295,37 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
           </button>
 
           {purchaseReturns.length > 0 && onDeleteAllReturns && (
-            <button
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `Are you sure you want to delete all ${purchaseReturns.length} return records?`
-                  )
-                ) {
-                  onDeleteAllReturns();
-                }
-              }}
-              className="px-3.5 py-2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl flex items-center gap-1 shadow-xs transition-all cursor-pointer"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>All Delete ({purchaseReturns.length})</span>
-            </button>
+            showDeleteAllConfirm ? (
+              <div className="flex items-center gap-1.5 bg-red-50 border border-red-200 px-2.5 py-1.5 rounded-xl">
+                <span className="text-[11px] font-bold text-red-700">Delete all {purchaseReturns.length}?</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDeleteAllReturns();
+                    setShowDeleteAllConfirm(false);
+                  }}
+                  className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold rounded-lg cursor-pointer"
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteAllConfirm(false)}
+                  className="px-2 py-1 bg-white border border-slate-200 text-slate-700 text-[11px] font-bold rounded-lg cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowDeleteAllConfirm(true)}
+                className="px-3.5 py-2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl flex items-center gap-1 shadow-xs transition-all cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>All Delete ({purchaseReturns.length})</span>
+              </button>
+            )
           )}
         </div>
       </div>
@@ -424,18 +445,36 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
                         >
                           <Printer className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (window.confirm('Delete this purchase return record?')) {
-                              onDeletePurchaseReturn(ret.id);
-                            }
-                          }}
-                          className="p-1.5 text-slate-400 hover:text-red-600 rounded transition-colors cursor-pointer"
-                          title="Delete Return"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {returnToDeleteId === ret.id ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onDeletePurchaseReturn(ret.id);
+                                setReturnToDeleteId(null);
+                              }}
+                              className="px-2 py-1 bg-red-600 text-white rounded text-[10px] font-bold cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setReturnToDeleteId(null)}
+                              className="px-2 py-1 bg-slate-100 text-slate-700 rounded text-[10px] font-bold cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setReturnToDeleteId(ret.id)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 rounded transition-colors cursor-pointer"
+                            title="Delete Return"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -466,6 +505,12 @@ export const PurchaseReturnsPage: React.FC<PurchaseReturnsPageProps> = ({
             </div>
 
             <form onSubmit={handleSubmitReturn} className="space-y-4">
+              {formError && (
+                <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{formError}</span>
+                </div>
+              )}
               {/* Step 1: Select Original Purchase Invoice */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">

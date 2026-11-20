@@ -47,6 +47,7 @@ export const ReceiptDesignerModal: React.FC<ReceiptDesignerModalProps> = ({
   const [activeTab, setActiveTab] = useState<'owner' | 'content' | 'design' | 'sections'>('owner');
   const [current, setCurrent] = useState<ReceiptSettings>({ ...settings });
   const [isSavedAlert, setIsSavedAlert] = useState(false);
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
 
   const photoFileInputRef = useRef<HTMLInputElement>(null);
   const logoFileInputRef = useRef<HTMLInputElement>(null);
@@ -90,9 +91,8 @@ export const ReceiptDesignerModal: React.FC<ReceiptDesignerModalProps> = ({
   };
 
   const handleRestoreDefault = () => {
-    if (window.confirm('کیا آپ رسید کی تمام سیٹنگز اصل حالت (ڈیفالٹ) پر واپس لانا چاہتے ہیں؟')) {
-      setCurrent({ ...DEFAULT_RECEIPT_SETTINGS });
-    }
+    setCurrent({ ...DEFAULT_RECEIPT_SETTINGS });
+    setShowRestoreConfirm(false);
   };
 
   // Dummy or real items for live preview
@@ -170,7 +170,7 @@ export const ReceiptDesignerModal: React.FC<ReceiptDesignerModalProps> = ({
 
           <div className="flex items-center gap-2">
             <button
-              onClick={handleRestoreDefault}
+              onClick={() => setShowRestoreConfirm(true)}
               className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all cursor-pointer"
               title="Restore Default Settings"
             >
@@ -807,13 +807,33 @@ export const ReceiptDesignerModal: React.FC<ReceiptDesignerModalProps> = ({
 
             {/* Bottom Actions Bar */}
             <div className="p-4 bg-white border-t border-slate-200 flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={handleRestoreDefault}
-                className="text-xs text-slate-500 hover:text-slate-800 font-semibold cursor-pointer"
-              >
-                Restore Defaults
-              </button>
+              {showRestoreConfirm ? (
+                <div className="flex items-center gap-2 bg-amber-50 border border-amber-300 px-3 py-1.5 rounded-xl text-xs">
+                  <span className="font-bold text-amber-900">ڈیفالٹ بحال کریں؟</span>
+                  <button
+                    type="button"
+                    onClick={handleRestoreDefault}
+                    className="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-bold cursor-pointer"
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowRestoreConfirm(false)}
+                    className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowRestoreConfirm(true)}
+                  className="text-xs text-slate-500 hover:text-slate-800 font-semibold cursor-pointer"
+                >
+                  Restore Defaults
+                </button>
+              )}
 
               <div className="flex items-center gap-2">
                 <button

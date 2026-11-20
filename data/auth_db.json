@@ -1,4 +1,6 @@
 {
+  "superAdmin": null,
+  "superAdminSetupLocked": false,
   "users": [
     {
       "id": "USR-SHOP-001",
@@ -12,7 +14,8 @@
       "passwordSalt": "e7c28375bbafd073121dc65f35036cc6",
       "passwordHash": "d1d4a3c804cee64f0dc968cbbfca82612cddc9b21bc15582a8550a7a8c72ede2",
       "mustChangePasswordOnFirstLogin": false,
-      "createdAt": "2026-01-01T00:00:00.000Z"
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "username": "waqasmart"
     }
   ],
   "sessions": {
@@ -27,5 +30,6 @@
       "ip": "127.0.0.1"
     }
   },
+  "pendingOtps": {},
   "failedAttempts": {}
 }

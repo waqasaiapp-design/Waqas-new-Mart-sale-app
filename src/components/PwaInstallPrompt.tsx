@@ -22,6 +22,7 @@ export const PwaInstallPrompt: React.FC<PwaInstallPromptProps> = ({
   deferredPrompt,
 }) => {
   const [installed, setInstalled] = useState(false);
+  const [showManualGuide, setShowManualGuide] = useState(false);
 
   if (!isOpen) return null;
 
@@ -33,10 +34,7 @@ export const PwaInstallPrompt: React.FC<PwaInstallPromptProps> = ({
         setInstalled(true);
       }
     } else {
-      // Fallback instruction
-      alert(
-        'To install on Windows: Click the Install icon (⨁) in your Chrome/Edge browser address bar, or click Menu (⋮) -> "Install WAQAS MART".\n\nTo install on Android: Tap Chrome Menu (⋮) -> "Add to Home screen" or "Install App".'
-      );
+      setShowManualGuide(true);
     }
   };
 
@@ -92,6 +90,21 @@ export const PwaInstallPrompt: React.FC<PwaInstallPromptProps> = ({
               </div>
             </div>
           </div>
+
+          {installed && (
+            <div className="p-3 rounded-2xl bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+              <span>WAQAS MART installation started. Check your desktop or home screen.</span>
+            </div>
+          )}
+
+          {showManualGuide && !installed && (
+            <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 text-[11px] space-y-1">
+              <div className="font-black">Browser Install Prompt Unavailable</div>
+              <p>On Windows Chrome/Edge: click the Install icon in the address bar or Menu (⋮) → "Install WAQAS MART".</p>
+              <p>On Android/iOS: open browser Menu/Share → "Add to Home screen" or "Install App".</p>
+            </div>
+          )}
 
           <div className="pt-2 flex flex-col gap-2">
             <button

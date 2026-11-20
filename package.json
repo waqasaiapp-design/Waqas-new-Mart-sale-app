@@ -1,13 +1,13 @@
 {
   "name": "waqas-software-pos-app",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.6.5",
   "description": "WAQAS MART POS Supermarket Management System",
   "repository": {
     "type": "git",
-    "url": "https://github.com/waqasaiapp-design/Waqas-software-pos-app.git"
+    "url": "https://github.com/waqasaiapp-design/Waqas-new-Mart-sale-app.git"
   },
-  "homepage": "https://github.com/waqasaiapp-design/Waqas-software-pos-app#readme",
+  "homepage": "https://github.com/waqasaiapp-design/Waqas-new-Mart-sale-app#readme",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -29,6 +29,7 @@
     "canvas-confetti": "^1.9.4",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "firebase": "^13.4.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "qrcode": "^1.5.4",

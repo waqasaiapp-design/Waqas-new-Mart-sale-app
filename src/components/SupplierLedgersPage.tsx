@@ -37,6 +37,7 @@ interface SupplierLedgersPageProps {
   ledgerEntries: SupplierLedgerEntry[];
   purchases: PurchaseTransaction[];
   branding?: StoreBranding;
+  initialTab?: 'suppliers' | 'payments' | 'ledger';
   onSaveSupplier: (supplier: Supplier) => void;
   onDeleteSupplier: (supplierId: string) => void;
   onSaveLedgerEntry: (entry: SupplierLedgerEntry) => void;
@@ -51,6 +52,7 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
   ledgerEntries,
   purchases,
   branding,
+  initialTab = 'suppliers',
   onSaveSupplier,
   onDeleteSupplier,
   onSaveLedgerEntry,
@@ -61,11 +63,19 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
 }) => {
   const [selectedSupplierId, setSelectedSupplierId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showPayableOnly, setShowPayableOnly] = useState(initialTab === 'payments');
   const [isAddSupplierOpen, setIsAddSupplierOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [entryToDeleteId, setEntryToDeleteId] = useState<string | null>(null);
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [printFeedback, setPrintFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+
+  React.useEffect(() => {
+    setShowPayableOnly(initialTab === 'payments');
+  }, [initialTab]);
 
   // New Supplier Form State
   const [newSupName, setNewSupName] = useState('');
@@ -151,14 +161,18 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
 
   const filteredSuppliers = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-    if (!q) return suppliersWithStats;
-    return suppliersWithStats.filter(
-      (s) =>
+    return suppliersWithStats.filter((s) => {
+      if (showPayableOnly && s.currentPayable <= 0 && suppliersWithStats.some((x) => x.currentPayable > 0)) {
+        return false;
+      }
+      if (!q) return true;
+      return (
         s.name.toLowerCase().includes(q) ||
         (s.phone && s.phone.includes(q)) ||
         (s.city && s.city.toLowerCase().includes(q))
-    );
-  }, [suppliersWithStats, searchQuery]);
+      );
+    });
+  }, [suppliersWithStats, searchQuery, showPayableOnly]);
 
   // Handle Add Supplier
   const handleCreateSupplier = (e: React.FormEvent) => {
@@ -208,9 +222,10 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
     if (!activeSupplier) return;
     const amount = parseFloat(payAmount);
     if (isNaN(amount) || amount <= 0) {
-      alert('Please enter a valid payment amount.');
+      setFormError('Please enter a valid positive payment amount.');
       return;
     }
+    setFormError(null);
 
     const newBalance = Math.max(0, activeSupplier.currentPayable - amount);
     const entry: SupplierLedgerEntry = {
@@ -381,22 +396,38 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
           </button>
 
           {suppliers.length > 0 && onDeleteAllSuppliers && (
-            <button
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `Are you sure you want to delete all ${suppliers.length} suppliers and their ledgers?\nکیا آپ تمام سپلائرز اور ان کے کھاتے ڈیلیٹ کرنا چاہتے ہیں؟`
-                  )
-                ) {
-                  onDeleteAllSuppliers();
-                }
-              }}
-              className="px-3.5 py-2 bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-xs rounded-xl flex items-center gap-1 shadow-xs transition-all cursor-pointer"
-              title="Delete all suppliers"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>All Delete ({suppliers.length})</span>
-            </button>
+            showDeleteAllConfirm ? (
+              <div className="flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-xl px-2.5 py-1.5">
+                <span className="text-[11px] font-bold text-red-800">Delete all {suppliers.length}?</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDeleteAllSuppliers();
+                    setShowDeleteAllConfirm(false);
+                  }}
+                  className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteAllConfirm(false)}
+                  className="px-2 py-1 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowDeleteAllConfirm(true)}
+                className="px-3.5 py-2 bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-xs rounded-xl flex items-center gap-1 shadow-xs transition-all cursor-pointer"
+                title="Delete all suppliers"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>All Delete ({suppliers.length})</span>
+              </button>
+            )
           )}
         </div>
       </div>
@@ -541,17 +572,37 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
                           Rs. {entry.runningBalance.toFixed(0)}
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          <button
-                            onClick={() => {
-                              if (window.confirm('Delete this ledger record?')) {
-                                onDeleteLedgerEntry(entry.id);
-                              }
-                            }}
-                            className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors"
-                            title="Delete Entry"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {entryToDeleteId === entry.id ? (
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onDeleteLedgerEntry(entry.id);
+                                  setEntryToDeleteId(null);
+                                  showToast('Supplier ledger record deleted');
+                                }}
+                                className="px-2 py-0.5 bg-red-600 text-white rounded text-[10px] font-bold cursor-pointer"
+                              >
+                                Delete
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEntryToDeleteId(null)}
+                                className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded text-[10px] font-bold cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setEntryToDeleteId(entry.id)}
+                              className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors cursor-pointer"
+                              title="Delete Entry"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -840,6 +891,13 @@ export const SupplierLedgersPage: React.FC<SupplierLedgersPageProps> = ({
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {formError && (
+        <div className="fixed bottom-4 right-4 z-[60] bg-red-600 text-white px-4 py-2.5 rounded-xl shadow-lg text-xs font-bold flex items-center gap-2">
+          <span>{formError}</span>
+          <button type="button" onClick={() => setFormError(null)} className="font-black cursor-pointer">×</button>
         </div>
       )}
       </div>

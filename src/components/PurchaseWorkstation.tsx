@@ -69,6 +69,8 @@ export interface PurchaseWorkstationProps {
   onOpenScanner?: () => void;
   onNavigate?: (page: string) => void;
   onBackToHome?: () => void;
+  scannedBarcode?: string | null;
+  onClearScannedBarcode?: () => void;
 }
 
 const EXPENSE_OPTIONS = [
@@ -101,6 +103,8 @@ export const PurchaseWorkstation: React.FC<PurchaseWorkstationProps> = ({
   onOpenAddProduct,
   onNavigate,
   onBackToHome,
+  scannedBarcode = null,
+  onClearScannedBarcode,
 }) => {
   const userNameDisplay = currentUser?.displayName || 'Admin 102';
 
@@ -429,6 +433,13 @@ export const PurchaseWorkstation: React.FC<PurchaseWorkstationProps> = ({
       showToast(`Product Not Found — "${code}"`, 'error');
     }
   };
+
+  useEffect(() => {
+    if (scannedBarcode && scannedBarcode.trim()) {
+      handleBarcodeDetected(scannedBarcode.trim());
+      onClearScannedBarcode?.();
+    }
+  }, [scannedBarcode]);
 
   // Hardware USB / Bluetooth barcode scanner
   useEffect(() => {

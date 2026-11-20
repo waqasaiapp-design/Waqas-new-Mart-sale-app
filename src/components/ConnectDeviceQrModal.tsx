@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import { PairingSession, DeviceInfo } from '../types/pos';
-import { getApiBaseUrl } from '../utils/syncService';
+import { getApiBaseUrl, safeFetchJson } from '../utils/syncService';
 import confetti from 'canvas-confetti';
 
 interface ConnectDeviceQrModalProps {
@@ -49,9 +49,7 @@ export const ConnectDeviceQrModal: React.FC<ConnectDeviceQrModalProps> = ({
     setErrorMsg(null);
     setApprovedDevice(null);
     try {
-      const base = getApiBaseUrl();
-      const res = await fetch(`${base}/api/devices/pairing-session`, { method: 'POST' });
-      const data = await res.json();
+      const { data } = await safeFetchJson('/api/devices/pairing-session', { method: 'POST', body: '{}' });
       if (!data.success) {
         throw new Error(data.message || 'Failed to generate pairing session');
       }
@@ -124,10 +122,7 @@ export const ConnectDeviceQrModal: React.FC<ConnectDeviceQrModalProps> = ({
 
     pollIntervalRef.current = setInterval(async () => {
       try {
-        const base = getApiBaseUrl();
-        const res = await fetch(`${base}/api/devices/pairing-status/${session.pairingToken}`);
-        if (!res.ok) return;
-        const data = await res.json();
+        const { data } = await safeFetchJson(`/api/devices/pairing-status/${session.pairingToken}`);
         if (data.success && data.session) {
           setSession((prev) => {
             if (!prev) return data.session;
@@ -158,25 +153,22 @@ export const ConnectDeviceQrModal: React.FC<ConnectDeviceQrModalProps> = ({
     if (!session) return;
     setIsApproving(true);
     try {
-      const base = getApiBaseUrl();
-      const res = await fetch(`${base}/api/devices/approve-pairing`, {
+      const { data } = await safeFetchJson('/api/devices/approve-pairing', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           pairingToken: session.pairingToken,
           approve: true,
         }),
       });
-      const data = await res.json();
       if (data.success && data.device) {
         setApprovedDevice(data.device);
         confetti({ particleCount: 90, spread: 70, origin: { y: 0.55 } });
         if (onDeviceApproved) onDeviceApproved(data.device);
       } else {
-        alert(data.message || 'Failed to approve device.');
+        setErrorMsg(data.message || 'Failed to approve device.');
       }
-    } catch {
-      alert('Error approving device connection.');
+    } catch (e: any) {
+      setErrorMsg(e?.message || 'Error approving device connection.');
     } finally {
       setIsApproving(false);
     }
@@ -186,9 +178,8 @@ export const ConnectDeviceQrModal: React.FC<ConnectDeviceQrModalProps> = ({
   const handleReject = async () => {
     if (!session) return;
     try {
-      await fetch('/api/devices/approve-pairing', {
+      await safeFetchJson('/api/devices/approve-pairing', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           pairingToken: session.pairingToken,
           approve: false,
@@ -196,7 +187,7 @@ export const ConnectDeviceQrModal: React.FC<ConnectDeviceQrModalProps> = ({
       });
       generateNewSession();
     } catch {
-      alert('Error rejecting pairing.');
+      setErrorMsg('Error rejecting pairing.');
     }
   };
 

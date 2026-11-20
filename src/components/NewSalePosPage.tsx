@@ -100,6 +100,7 @@ interface NewSalePosPageProps {
   resumedBill?: HeldBill | null;
   onClearResumedBill?: () => void;
   onBackToHome?: () => void;
+  canViewCostAndProfit?: boolean;
 }
 
 export const NewSalePosPage: React.FC<NewSalePosPageProps> = ({
@@ -126,6 +127,7 @@ export const NewSalePosPage: React.FC<NewSalePosPageProps> = ({
   resumedBill,
   onClearResumedBill,
   onBackToHome,
+  canViewCostAndProfit = true,
 }) => {
   // Input refs and scanner control
   const barcodeInputRef = useRef<HTMLInputElement>(null);
@@ -565,19 +567,24 @@ export const NewSalePosPage: React.FC<NewSalePosPageProps> = ({
     showToast(`Removed "${item.product.name}"`, 'info');
   };
 
+  const [pendingConfirmAction, setPendingConfirmAction] = useState<'clear_items' | 'new_sale' | null>(null);
+
   // Delete all items (with confirmation)
+  const executeClearAllItems = () => {
+    setSaleItems([]);
+    setSelectedItemIndex(null);
+    setInvoiceDiscountOverride(0);
+    setInvoiceTaxOverride(0);
+    setCashReceived(0);
+    setCashReceivedInput('');
+    sounds.playErrorTone();
+    showToast('All items cleared from sale table.', 'info');
+    setPendingConfirmAction(null);
+  };
+
   const handleDeleteAllItems = () => {
     if (saleItems.length === 0) return;
-    if (window.confirm(`Delete all ${saleItems.length} items from current sale? / تمام آئٹمز ڈیلیٹ کریں؟`)) {
-      setSaleItems([]);
-      setSelectedItemIndex(null);
-      setInvoiceDiscountOverride(0);
-      setInvoiceTaxOverride(0);
-      setCashReceived(0);
-      setCashReceivedInput('');
-      sounds.playErrorTone();
-      showToast('All items cleared from sale table.', 'info');
-    }
+    setPendingConfirmAction('clear_items');
   };
 
   // Hold Bill handler
@@ -644,12 +651,7 @@ export const NewSalePosPage: React.FC<NewSalePosPageProps> = ({
   };
 
   // New Sale Action
-  const handleNewSale = () => {
-    if (saleItems.length > 0) {
-      if (!window.confirm('Start a new blank sale? Unsaved items will be cleared. / نیا بل شروع کریں؟')) {
-        return;
-      }
-    }
+  const executeNewSale = () => {
     setSaleItems([]);
     setSelectedItemIndex(null);
     setInvoiceDiscountOverride(0);
@@ -658,7 +660,16 @@ export const NewSalePosPage: React.FC<NewSalePosPageProps> = ({
     setCashReceivedInput('');
     setInvoiceNumber((prev) => (parseInt(prev, 10) + 1).toString());
     showToast('Ready for new sale! / نیا بل تیار ہے', 'info');
+    setPendingConfirmAction(null);
     setTimeout(() => barcodeInputRef.current?.focus(), 50);
+  };
+
+  const handleNewSale = () => {
+    if (saleItems.length > 0) {
+      setPendingConfirmAction('new_sale');
+      return;
+    }
+    executeNewSale();
   };
 
   // Quick Customer Create Submit
@@ -1563,16 +1574,17 @@ export const NewSalePosPage: React.FC<NewSalePosPageProps> = ({
           <div className="w-72 xl:w-80 bg-white rounded-xl border border-slate-300 shadow-xs p-2.5 flex flex-col justify-between gap-1 text-xs shrink-0">
             <div className="font-black text-slate-900 border-b border-slate-200 pb-1 text-[11px] flex items-center justify-between">
               <span>Item Details...</span>
-              {/* Cashier purchase cost toggle (Requirement 4) */}
-              <button
-                type="button"
-                onClick={() => setShowCashierCost(!showCashierCost)}
-                className="text-[9px] text-slate-400 hover:text-slate-700 flex items-center gap-0.5 cursor-pointer"
-                title="Cashier Purchase Cost"
-              >
-                {showCashierCost ? <Eye className="w-2.5 h-2.5 text-blue-600" /> : <EyeOff className="w-2.5 h-2.5" />}
-                <span>Cost</span>
-              </button>
+              {canViewCostAndProfit && (
+                <button
+                  type="button"
+                  onClick={() => setShowCashierCost(!showCashierCost)}
+                  className="text-[9px] text-slate-400 hover:text-slate-700 flex items-center gap-0.5 cursor-pointer"
+                  title="Cashier Purchase Cost"
+                >
+                  {showCashierCost ? <Eye className="w-2.5 h-2.5 text-blue-600" /> : <EyeOff className="w-2.5 h-2.5" />}
+                  <span>Cost</span>
+                </button>
+              )}
             </div>
 
             {/* Barcode */}
@@ -1632,11 +1644,11 @@ export const NewSalePosPage: React.FC<NewSalePosPageProps> = ({
               </div>
             </div>
 
-            {/* Cashier-Only Purchase Cost Field (Requirement 4) */}
-            {showCashierCost && activeInspectorItem && (
+            {/* Cashier-Only Purchase Cost Field */}
+            {canViewCostAndProfit && showCashierCost && activeInspectorItem && (
               <div className="bg-amber-50/90 border border-amber-200 rounded px-2 py-0.5 flex items-center justify-between text-[10px]">
                 <span className="font-bold text-amber-800 flex items-center gap-1">
-                  <span>🔒 Cashier Cost:</span>
+                  <span>Cashier Cost:</span>
                 </span>
                 <span className="font-mono font-black text-amber-950">
                   {formatRs(activeInspectorItem.product.costPrice || 0)}
@@ -2294,6 +2306,41 @@ export const NewSalePosPage: React.FC<NewSalePosPageProps> = ({
                     </div>
                   </button>
                 ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingConfirmAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl w-full max-w-sm p-5 shadow-2xl border border-slate-200 space-y-4">
+            <h3 className="text-sm font-black text-slate-900">
+              {pendingConfirmAction === 'clear_items'
+                ? `Delete all ${saleItems.length} items from current sale?`
+                : 'Start a new blank sale?'}
+            </h3>
+            <p className="text-xs text-slate-600">
+              {pendingConfirmAction === 'clear_items'
+                ? 'تمام آئٹمز موجودہ سیل سے صاف ہو جائیں گے۔'
+                : 'Unsaved items in the current cart will be cleared. / نیا بل شروع کریں؟'}
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingConfirmAction(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  pendingConfirmAction === 'clear_items' ? executeClearAllItems() : executeNewSale()
+                }
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold cursor-pointer"
+              >
+                {pendingConfirmAction === 'clear_items' ? 'Delete All' : 'Start New Sale'}
+              </button>
             </div>
           </div>
         </div>

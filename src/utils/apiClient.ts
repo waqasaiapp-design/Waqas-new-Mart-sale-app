@@ -193,17 +193,24 @@ export async function safeFetchJson<T = any>(
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const fullUrl = `${base}${cleanEndpoint}`;
 
-  // Session Token handling
+  // Session Token & Multi-Device Token handling
   let token: string | null = null;
+  let deviceIdHeader: string | null = null;
+  let deviceTokenHeader: string | null = null;
   if (typeof window !== 'undefined') {
     try {
-      const savedAuth = localStorage.getItem('waqas_mart_auth_session');
+      const savedAuth = localStorage.getItem('waqas_pos_session_v1');
       if (savedAuth) {
         const parsed = JSON.parse(savedAuth);
         if (parsed?.token) token = parsed.token;
       }
-      if (!token) {
-        token = localStorage.getItem('waqas_mart_session_token');
+    } catch {}
+    try {
+      const savedDev = localStorage.getItem('waqas_mart_device_info_v2');
+      if (savedDev) {
+        const devParsed = JSON.parse(savedDev);
+        if (devParsed?.deviceId) deviceIdHeader = String(devParsed.deviceId);
+        if (devParsed?.sessionToken) deviceTokenHeader = String(devParsed.sessionToken);
       }
     } catch {}
   }
@@ -219,6 +226,14 @@ export async function safeFetchJson<T = any>(
 
   if (token && !headers['Authorization'] && !headers['authorization']) {
     headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  if (deviceIdHeader && !headers['x-device-id'] && !headers['X-Device-Id']) {
+    headers['x-device-id'] = deviceIdHeader;
+  }
+
+  if (deviceTokenHeader && !headers['x-device-token'] && !headers['X-Device-Token']) {
+    headers['x-device-token'] = deviceTokenHeader;
   }
 
   const controller = new AbortController();

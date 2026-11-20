@@ -48,6 +48,7 @@ export const CctvPage: React.FC<CctvPageProps> = ({
   const [isAddCameraModalOpen, setIsAddCameraModalOpen] = useState(false);
   const [editingCamera, setEditingCamera] = useState<CctvCamera | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [camToDeleteId, setCamToDeleteId] = useState<string | null>(null);
 
   // DVR Form State
   const [dvrBrand, setDvrBrand] = useState(dvrConfig.brand || 'Hikvision');
@@ -391,16 +392,35 @@ export const CctvPage: React.FC<CctvPageProps> = ({
               <div className="p-2 bg-black/70 flex items-center justify-between text-[11px] text-slate-400 z-10 border-t border-slate-900">
                 <span>Click for Fullscreen Live</span>
                 <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    onClick={() => {
-                      if (window.confirm(`Delete ${cam.name}?`)) {
-                        onDeleteCamera(cam.id);
-                      }
-                    }}
-                    className="p-1 hover:text-red-400 text-slate-500 transition-colors"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  {camToDeleteId === cam.id ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onDeleteCamera(cam.id);
+                          setCamToDeleteId(null);
+                        }}
+                        className="px-2 py-0.5 rounded bg-red-600 text-white text-[10px] font-bold cursor-pointer"
+                      >
+                        Delete
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCamToDeleteId(null)}
+                        className="px-2 py-0.5 rounded bg-slate-700 text-slate-200 text-[10px] font-bold cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setCamToDeleteId(cam.id)}
+                      className="p-1 hover:text-red-400 text-slate-500 transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

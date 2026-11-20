@@ -49,6 +49,7 @@ import {
   ExternalLink,
   Check,
   Download,
+  LogOut,
 } from 'lucide-react';
 import {
   Product,
@@ -65,6 +66,9 @@ import {
   SoftwareOwnerProfile,
   LOCKED_SOFTWARE_OWNER,
   DEFAULT_MART_OWNER,
+  SyncStatusSnapshot,
+  AuthUser,
+  StaffModulePermissions,
 } from '../types/pos';
 import { safeFetchJson } from '../utils/apiClient';
 import { formatRs } from '../data/defaultProducts';
@@ -98,6 +102,11 @@ export interface HomePageProps {
   onOpenResetSystem?: () => void;
   shopId?: string;
   deferredPrompt?: BeforeInstallPromptEvent | null;
+  syncStatus?: SyncStatusSnapshot;
+  onSyncNow?: () => void;
+  authUser?: AuthUser | null;
+  staffPermissions?: StaffModulePermissions | null;
+  onSignOut?: () => void;
 }
 
 export const HomePage: React.FC<HomePageProps> = ({
@@ -127,6 +136,11 @@ export const HomePage: React.FC<HomePageProps> = ({
   onOpenResetSystem,
   shopId = 'WM-001',
   deferredPrompt,
+  syncStatus,
+  onSyncNow,
+  authUser,
+  staffPermissions,
+  onSignOut,
 }) => {
   // Mobile sidebar state
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -292,7 +306,7 @@ export const HomePage: React.FC<HomePageProps> = ({
     },
     {
       id: 'stock',
-      title: 'Stock',
+      title: 'Stock Management',
       icon: Layers,
       onClick: () => onNavigate('Total Stock'),
     },
@@ -300,29 +314,41 @@ export const HomePage: React.FC<HomePageProps> = ({
       id: 'products',
       title: 'Products',
       icon: Package,
-      onClick: () => onNavigate('Total Stock'),
+      onClick: () => onNavigate('Products'),
+    },
+    {
+      id: 'customers_mgmt',
+      title: 'Customers',
+      icon: Users,
+      onClick: () => onNavigate('Customers'),
     },
     {
       id: 'customers_udhaar',
-      title: 'Customers Udhaar',
-      icon: Users,
+      title: 'Customer Udhaar',
+      icon: Wallet,
+      onClick: () => onNavigate('Customer Udhar'),
+    },
+    {
+      id: 'customer_ledgers',
+      title: 'Customer Ledger',
+      icon: FileSpreadsheet,
       onClick: () => onNavigate('Customer Ledgers'),
     },
     {
       id: 'suppliers',
       title: 'Suppliers',
       icon: Truck,
-      onClick: () => onNavigate('Supplier Ledgers'),
+      onClick: () => onNavigate('Suppliers'),
     },
     {
-      id: 'customer_ledgers',
-      title: 'Customer Ledgers',
-      icon: FileSpreadsheet,
-      onClick: () => onNavigate('Customer Ledgers'),
+      id: 'supplier_payments',
+      title: 'Supplier Payments',
+      icon: DollarSign,
+      onClick: () => onNavigate('Supplier Payments'),
     },
     {
       id: 'supplier_ledgers',
-      title: 'Supplier Ledgers',
+      title: 'Supplier Ledger',
       icon: CreditCard,
       onClick: () => onNavigate('Supplier Ledgers'),
     },
@@ -339,28 +365,46 @@ export const HomePage: React.FC<HomePageProps> = ({
       onClick: () => onNavigate('Expenses'),
     },
     {
-      id: 'purchase_returns',
-      title: 'Purchase Returns',
+      id: 'sale_returns',
+      title: 'Sale Return',
       icon: RotateCcw,
+      onClick: () => onNavigate('Sale Returns'),
+    },
+    {
+      id: 'purchase_returns',
+      title: 'Purchase Return',
+      icon: Undo,
       onClick: () => onNavigate('Purchase Returns'),
     },
     {
-      id: 'reports',
-      title: 'Reports',
+      id: 'sales_reports',
+      title: 'Sales Reports',
       icon: TrendingUp,
       onClick: () => onNavigate('Sale Summary'),
     },
     {
-      id: 'pos_terminal',
-      title: 'POS Terminal',
-      icon: Monitor,
-      onClick: () => onNavigate('New Sale POS'),
+      id: 'purchase_reports',
+      title: 'Purchase Reports',
+      icon: FileText,
+      onClick: () => onNavigate('Purchase Reports'),
     },
     {
-      id: 'cctv',
-      title: 'CCTV',
-      icon: Camera,
-      onClick: () => onNavigate('CCTV'),
+      id: 'profit_reports',
+      title: 'Profit & Loss',
+      icon: DollarSign,
+      onClick: () => onNavigate('Profit & Loss Reports'),
+    },
+    {
+      id: 'stock_reports',
+      title: 'Stock Reports',
+      icon: Layers,
+      onClick: () => onNavigate('Stock Reports'),
+    },
+    {
+      id: 'barcode_mgmt',
+      title: 'Barcode Management',
+      icon: ScanBarcode,
+      onClick: () => onNavigate('Barcode Management'),
     },
     {
       id: 'staff_management',
@@ -369,45 +413,83 @@ export const HomePage: React.FC<HomePageProps> = ({
       onClick: () => onNavigate('All Staff'),
     },
     {
-      id: 'connect_new_device',
-      title: 'Connect New Device',
-      icon: QrCode,
-      onClick: () => (onOpenConnectNewQr ? onOpenConnectNewQr() : onNavigate('Device Management')),
+      id: 'device_management',
+      title: 'Device Management',
+      icon: Smartphone,
+      onClick: () => onNavigate('Device Management'),
     },
     {
-      id: 'settings',
-      title: 'Settings',
+      id: 'qr_connection',
+      title: 'QR Connection',
+      icon: QrCode,
+      onClick: () => onNavigate('QR Code Connection'),
+    },
+    {
+      id: 'printer_settings',
+      title: 'Printer Settings',
+      icon: Printer,
+      onClick: () => onNavigate('Printer Settings'),
+    },
+    {
+      id: 'app_settings',
+      title: 'App Settings',
       icon: Settings,
-      onClick: onOpenSettings,
+      onClick: () => onNavigate('Application Settings'),
+    },
+    {
+      id: 'backup_restore',
+      title: 'Backup & Restore',
+      icon: Database,
+      onClick: () => onNavigate('Backup & Restore'),
+    },
+    {
+      id: 'security_login',
+      title: 'Security & Login',
+      icon: Shield,
+      onClick: () => onNavigate('Security & Login'),
+    },
+    {
+      id: 'cctv',
+      title: 'CCTV',
+      icon: Camera,
+      onClick: () => onNavigate('CCTV'),
     },
   ];
 
   // -----------------------------------------------------------------
-  // LEFT SIDEBAR NAVIGATION ITEMS (Exact match to reference picture)
+  // LEFT SIDEBAR NAVIGATION ITEMS (All 29 Connected Pages + CCTV)
   // -----------------------------------------------------------------
   const sidebarNavItems = [
-    { id: 'Home', label: 'Home', icon: Store, active: true },
-    { id: 'New Sale', label: 'New Sale', icon: ShoppingCart, onClick: () => onNavigate('New Sale POS') },
-    { id: 'Old Sale', label: 'Old Sale', icon: FileText, onClick: () => onNavigate('Sale POS') },
-    { id: 'New Purchase', label: 'New Purchase', icon: Truck, onClick: () => onNavigate('New Purchase Entry') },
-    { id: 'Old Purchase', label: 'Old Purchase', icon: FileText, onClick: () => onNavigate('Purchase Entry') },
-    { id: 'Stock', label: 'Stock', icon: Layers, onClick: () => onNavigate('Total Stock') },
-    { id: 'Products', label: 'Products', icon: Package, onClick: () => onNavigate('Total Stock') },
-    { id: 'Customers / Udhaar', label: 'Customers / Udhaar', icon: Users, onClick: () => onNavigate('Customer Ledgers') },
-    { id: 'Suppliers', label: 'Suppliers', icon: Truck, onClick: () => onNavigate('Supplier Ledgers') },
-    { id: 'Customer Ledgers', label: 'Customer Ledgers', icon: FileSpreadsheet, onClick: () => onNavigate('Customer Ledgers') },
-    { id: 'Supplier Ledgers', label: 'Supplier Ledgers', icon: CreditCard, onClick: () => onNavigate('Supplier Ledgers') },
-    { id: 'Daily Hisab', label: 'Daily Hisab', icon: FileSpreadsheet, onClick: () => onNavigate('Daily Hisab') },
-    { id: 'Expenses', label: 'Expenses', icon: Wallet, onClick: () => onNavigate('Expenses') },
-    { id: 'Purchase Returns', label: 'Purchase Returns', icon: RotateCcw, onClick: () => onNavigate('Purchase Returns') },
-    { id: 'Reports', label: 'Reports', icon: TrendingUp, onClick: () => onNavigate('Sale Summary') },
-    { id: 'POS Terminal', label: 'POS Terminal', icon: Monitor, onClick: () => onNavigate('New Sale POS') },
-    { id: 'CCTV', label: 'CCTV', icon: Camera, onClick: () => onNavigate('CCTV') },
-    { id: 'Staff Management', label: 'Staff Management', icon: UserCheck, onClick: () => onNavigate('All Staff') },
-    { id: 'Connect New Device', label: 'Connect New Device', icon: Smartphone, onClick: () => (onOpenConnectNewQr ? onOpenConnectNewQr() : onNavigate('Device Management')) },
-    { id: 'Settings', label: 'Settings', icon: Settings, onClick: onOpenSettings },
-    { id: 'Owner Profiles', label: 'Owner Profiles', icon: Crown, onClick: onOpenSettings },
-    { id: 'Backup & Restore', label: 'Backup & Restore', icon: Database, onClick: handleDownloadBackup },
+    { id: 'Home', label: '1. Home Dashboard', icon: Store, active: true },
+    { id: 'New Sale', label: '2. New Sale', icon: ShoppingCart, onClick: () => onNavigate('New Sale POS') },
+    { id: 'Old Sale', label: '3. Old Sale', icon: FileText, onClick: () => onNavigate('Sale POS') },
+    { id: 'New Purchase', label: '4. New Purchase', icon: Truck, onClick: () => onNavigate('New Purchase Entry') },
+    { id: 'Old Purchase', label: '5. Old Purchase', icon: FileText, onClick: () => onNavigate('Purchase Entry') },
+    { id: 'Stock Management', label: '6. Stock Management', icon: Layers, onClick: () => onNavigate('Total Stock') },
+    { id: 'Products Management', label: '7. Products Management', icon: Package, onClick: () => onNavigate('Products') },
+    { id: 'Customers Management', label: '8. Customers Management', icon: Users, onClick: () => onNavigate('Customers') },
+    { id: 'Customer Udhaar', label: '9. Customer Udhaar', icon: Wallet, onClick: () => onNavigate('Customer Udhar') },
+    { id: 'Suppliers Management', label: '10. Suppliers Management', icon: Truck, onClick: () => onNavigate('Suppliers') },
+    { id: 'Supplier Payments', label: '11. Supplier Payments', icon: DollarSign, onClick: () => onNavigate('Supplier Payments') },
+    { id: 'Daily Hisab', label: '12. Daily Hisab', icon: FileSpreadsheet, onClick: () => onNavigate('Daily Hisab') },
+    { id: 'Customer Ledger', label: '13. Customer Ledger', icon: FileSpreadsheet, onClick: () => onNavigate('Customer Ledgers') },
+    { id: 'Supplier Ledger', label: '14. Supplier Ledger', icon: CreditCard, onClick: () => onNavigate('Supplier Ledgers') },
+    { id: 'Expenses', label: '15. Expenses', icon: Wallet, onClick: () => onNavigate('Expenses') },
+    { id: 'Purchase Return', label: '16. Purchase Return', icon: Undo, onClick: () => onNavigate('Purchase Returns') },
+    { id: 'Sale Return', label: '17. Sale Return', icon: RotateCcw, onClick: () => onNavigate('Sale Returns') },
+    { id: 'Sales Reports', label: '18. Sales Reports', icon: TrendingUp, onClick: () => onNavigate('Sale Summary') },
+    { id: 'Purchase Reports', label: '19. Purchase Reports', icon: FileText, onClick: () => onNavigate('Purchase Reports') },
+    { id: 'Profit & Loss Reports', label: '20. Profit & Loss Reports', icon: DollarSign, onClick: () => onNavigate('Profit & Loss Reports') },
+    { id: 'Stock Reports', label: '21. Stock Reports', icon: Layers, onClick: () => onNavigate('Stock Reports') },
+    { id: 'Staff Management', label: '22. Staff Management', icon: UserCheck, onClick: () => onNavigate('All Staff') },
+    { id: 'Device Management', label: '23. Device Management', icon: Smartphone, onClick: () => onNavigate('Device Management') },
+    { id: 'Barcode Management', label: '24. Barcode Management', icon: ScanBarcode, onClick: () => onNavigate('Barcode Management') },
+    { id: 'QR Code Connection', label: '25. QR Code Connection', icon: QrCode, onClick: () => onNavigate('QR Code Connection') },
+    { id: 'Printer Settings', label: '26. Printer Settings', icon: Printer, onClick: () => onNavigate('Printer Settings') },
+    { id: 'Application Settings', label: '27. Application Settings', icon: Settings, onClick: () => onNavigate('Application Settings') },
+    { id: 'Backup & Restore', label: '28. Backup and Restore', icon: Database, onClick: () => onNavigate('Backup & Restore') },
+    { id: 'Security & Login', label: '29. Security and Login', icon: Shield, onClick: () => onNavigate('Security & Login') },
+    { id: 'CCTV', label: 'CCTV Cameras', icon: Camera, onClick: () => onNavigate('CCTV') },
   ];
 
   // -----------------------------------------------------------------
@@ -416,112 +498,186 @@ export const HomePage: React.FC<HomePageProps> = ({
   const submenuSections = [
     {
       id: 'A',
-      title: 'A. Sales Management',
+      title: 'A. Sales & Returns Management',
       items: [
-        { label: 'New Sale (Spreadsheet)', onClick: () => onNavigate('New Sale POS') },
-        { label: 'Old Sale (Classic POS)', onClick: () => onNavigate('Sale POS') },
-        { label: 'Sales History', onClick: onOpenHistory },
-        { label: 'Search Invoice', onClick: onOpenHistory },
-        { label: 'Parked / Held Bills', onClick: () => onNavigate('New Sale POS') },
+        { label: 'New Sale', permKey: 'newSale' as keyof StaffModulePermissions, onClick: () => onNavigate('New Sale POS') },
+        { label: 'Old Sale', permKey: 'oldSale' as keyof StaffModulePermissions, onClick: () => onNavigate('Sale POS') },
+        { label: 'Sale Return', permKey: 'oldSale' as keyof StaffModulePermissions, onClick: () => onNavigate('Sale Returns') },
+        { label: 'Sales History', permKey: 'oldSale' as keyof StaffModulePermissions, onClick: onOpenHistory },
+        { label: 'Parked / Held Bills', permKey: 'newSale' as keyof StaffModulePermissions, onClick: () => onNavigate('New Sale POS') },
       ],
     },
     {
       id: 'B',
       title: 'B. Purchase Management',
       items: [
-        { label: 'New Purchase Entry', onClick: () => onNavigate('New Purchase Entry') },
-        { label: 'Old Purchase Form', onClick: () => onNavigate('Purchase Entry') },
-        { label: 'Purchase Invoices History', onClick: () => onNavigate('New Purchase Entry') },
-        { label: 'Purchase Returns', onClick: () => onNavigate('Purchase Returns') },
+        { label: 'New Purchase', permKey: 'newPurchase' as keyof StaffModulePermissions, onClick: () => onNavigate('New Purchase Entry') },
+        { label: 'Old Purchase', permKey: 'oldPurchase' as keyof StaffModulePermissions, onClick: () => onNavigate('Purchase Entry') },
+        { label: 'Purchase Return', permKey: 'oldPurchase' as keyof StaffModulePermissions, onClick: () => onNavigate('Purchase Returns') },
+        { label: 'Purchase Reports', permKey: 'reports' as keyof StaffModulePermissions, onClick: () => onNavigate('Purchase Reports') },
       ],
     },
     {
       id: 'C',
-      title: 'C. Inventory Management',
+      title: 'C. Stock, Products & Barcode',
       items: [
-        { label: 'Stock Catalog', onClick: () => onNavigate('Total Stock') },
-        { label: 'Add New Product', onClick: onOpenAddProduct },
-        { label: 'Product Categories', onClick: () => onNavigate('Total Stock') },
-        { label: 'Barcode Scanner', onClick: onOpenScanner },
-        { label: 'Stock Adjustments', onClick: () => onNavigate('Total Stock') },
-        { label: 'Low Stock Alerts', onClick: () => onNavigate('Total Stock') },
+        { label: 'Stock Management', permKey: 'stock' as keyof StaffModulePermissions, onClick: () => onNavigate('Total Stock') },
+        { label: 'Products Management', permKey: 'products' as keyof StaffModulePermissions, onClick: () => onNavigate('Products') },
+        { label: 'Barcode Management', permKey: 'products' as keyof StaffModulePermissions, onClick: () => onNavigate('Barcode Management') },
+        { label: 'Add New Product', permKey: 'products' as keyof StaffModulePermissions, onClick: onOpenAddProduct },
+        { label: 'Barcode Camera Scanner', permKey: 'products' as keyof StaffModulePermissions, onClick: onOpenScanner },
       ],
     },
     {
       id: 'D',
-      title: 'D. Customer Management',
+      title: 'D. Customer Accounts & Udhaar',
       items: [
-        { label: 'All Customers', onClick: () => onNavigate('Customer Ledgers') },
-        { label: 'Add Customer', onClick: () => onNavigate('Customer Ledgers') },
-        { label: 'Customer Udhaar Khata', onClick: () => onNavigate('Customer Ledgers') },
-        { label: 'Customer Ledgers', onClick: () => onNavigate('Customer Ledgers') },
-        { label: 'Cash Recovery Records', onClick: () => onNavigate('Customer Ledgers') },
+        { label: 'Customers Management', permKey: 'customers' as keyof StaffModulePermissions, onClick: () => onNavigate('Customers') },
+        { label: 'Customer Udhaar', permKey: 'customers' as keyof StaffModulePermissions, onClick: () => onNavigate('Customer Udhar') },
+        { label: 'Customer Ledger', permKey: 'customers' as keyof StaffModulePermissions, onClick: () => onNavigate('Customer Ledgers') },
       ],
     },
     {
       id: 'E',
-      title: 'E. Supplier Management',
+      title: 'E. Supplier Accounts & Payments',
       items: [
-        { label: 'Suppliers List', onClick: () => onNavigate('Supplier Ledgers') },
-        { label: 'Add Supplier', onClick: () => onNavigate('Supplier Ledgers') },
-        { label: 'Supplier Ledger Accounts', onClick: () => onNavigate('Supplier Ledgers') },
-        { label: 'Vendor Dues & Balances', onClick: () => onNavigate('Supplier Ledgers') },
+        { label: 'Suppliers Management', permKey: 'suppliers' as keyof StaffModulePermissions, onClick: () => onNavigate('Suppliers') },
+        { label: 'Supplier Payments', permKey: 'suppliers' as keyof StaffModulePermissions, onClick: () => onNavigate('Supplier Payments') },
+        { label: 'Supplier Ledger', permKey: 'suppliers' as keyof StaffModulePermissions, onClick: () => onNavigate('Supplier Ledgers') },
       ],
     },
     {
       id: 'F',
-      title: 'F. Accounts & Daily Hisab',
+      title: 'F. Daily Hisab & Expenses',
       items: [
-        { label: 'Daily Hisab Register', onClick: () => onNavigate('Daily Hisab') },
-        { label: 'Opening Cash Balance', onClick: () => onNavigate('Daily Hisab') },
-        { label: 'Daily Sales & Receipts', onClick: () => onNavigate('Daily Hisab') },
-        { label: 'Daily Purchases', onClick: () => onNavigate('Daily Hisab') },
-        { label: 'Kitchen & Daily Expenses', onClick: () => onNavigate('Daily Hisab') },
-        { label: 'Closing Cash Reconciliation', onClick: () => onNavigate('Daily Hisab') },
+        { label: 'Daily Hisab', permKey: 'reports' as keyof StaffModulePermissions, onClick: () => onNavigate('Daily Hisab') },
+        { label: 'Expenses', permKey: 'expenses' as keyof StaffModulePermissions, onClick: () => onNavigate('Expenses') },
+        { label: 'Cash Reconciliation', permKey: 'reports' as keyof StaffModulePermissions, onClick: () => onNavigate('Daily Hisab') },
       ],
     },
     {
       id: 'G',
-      title: 'G. Expense Management',
+      title: 'G. All Financial Reports',
       items: [
-        { label: 'All Mart Expenses', onClick: () => onNavigate('Expenses') },
-        { label: 'Add New Expense', onClick: () => onNavigate('Expenses') },
-        { label: 'Utility & Rent Categories', onClick: () => onNavigate('Expenses') },
-        { label: 'Expense History Vouchers', onClick: () => onNavigate('Expenses') },
+        { label: 'Sales Reports', permKey: 'reports' as keyof StaffModulePermissions, onClick: () => onNavigate('Sale Summary') },
+        { label: 'Purchase Reports', permKey: 'reports' as keyof StaffModulePermissions, onClick: () => onNavigate('Purchase Reports') },
+        { label: 'Profit and Loss Reports', permKey: 'reports' as keyof StaffModulePermissions, onClick: () => onNavigate('Profit & Loss Reports') },
+        { label: 'Stock Reports', permKey: 'reports' as keyof StaffModulePermissions, onClick: () => onNavigate('Stock Reports') },
       ],
     },
     {
       id: 'H',
-      title: 'H. Reports & Analytics',
+      title: 'H. Multi-Device & Staff',
       items: [
-        { label: 'Sales Financial Reports', onClick: () => onNavigate('Sale Summary') },
-        { label: 'Gross Margin & Profit Analysis', onClick: () => onNavigate('Sale Summary') },
-        { label: 'Stock Valuation Reports', onClick: () => onNavigate('Total Stock') },
-        { label: 'Customer Khata Udhar Reports', onClick: () => onNavigate('Customer Ledgers') },
+        { label: 'Staff Management', permKey: 'settings' as keyof StaffModulePermissions, onClick: () => onNavigate('All Staff') },
+        { label: 'Device Management', permKey: 'settings' as keyof StaffModulePermissions, onClick: () => onNavigate('Device Management') },
+        { label: 'QR Code Connection', permKey: 'settings' as keyof StaffModulePermissions, onClick: () => onNavigate('QR Code Connection') },
+        { label: 'CCTV Cameras', permKey: 'settings' as keyof StaffModulePermissions, onClick: () => onNavigate('CCTV') },
       ],
     },
     {
       id: 'I',
-      title: 'I. Business & Device Management',
+      title: 'I. Printer & Application Settings',
       items: [
-        { label: 'Staff & Cashier Shifts', onClick: () => onNavigate('All Staff') },
-        { label: 'POS Terminal Workstation', onClick: () => onNavigate('New Sale POS') },
-        { label: 'CCTV IP & DVR Streams', onClick: () => onNavigate('CCTV') },
-        { label: 'Connect New Device (QR)', onClick: () => (onOpenConnectNewQr ? onOpenConnectNewQr() : onNavigate('Device Management')) },
+        { label: 'Printer Settings', permKey: 'printing' as keyof StaffModulePermissions, onClick: () => onNavigate('Printer Settings') },
+        { label: 'Application Settings', permKey: 'settings' as keyof StaffModulePermissions, onClick: () => onNavigate('Application Settings') },
+        { label: 'Receipt Designer (80mm/58mm)', permKey: 'printing' as keyof StaffModulePermissions, onClick: () => (onOpenReceiptDesigner ? onOpenReceiptDesigner() : onOpenSettings()) },
       ],
     },
     {
       id: 'J',
-      title: 'J. Settings & System',
+      title: 'J. Security, Login & Backup',
       items: [
-        { label: 'Store Branding & Details', onClick: onOpenSettings },
-        { label: 'Software Owner Info (Locked)', onClick: onOpenSettings },
-        { label: 'Mart Owner Profile (Editable)', onClick: onOpenSettings },
-        { label: 'Receipt Designer (80mm/58mm)', onClick: () => (onOpenReceiptDesigner ? onOpenReceiptDesigner() : onOpenSettings()) },
-        { label: 'Backup System JSON', onClick: handleDownloadBackup },
+        { label: 'Backup and Restore', permKey: 'settings' as keyof StaffModulePermissions, onClick: () => onNavigate('Backup & Restore') },
+        { label: 'Security and Login', permKey: 'settings' as keyof StaffModulePermissions, onClick: () => onNavigate('Security & Login') },
+        { label: 'Download Offline JSON Backup', permKey: 'settings' as keyof StaffModulePermissions, onClick: handleDownloadBackup },
       ],
     },
   ];
+
+  const isStaff = authUser?.role === 'STAFF' && Boolean(staffPermissions);
+  const hasPerm = (perm?: keyof StaffModulePermissions) => {
+    if (!isStaff || !perm || !staffPermissions) return true;
+    if (perm === 'reports') return Boolean(staffPermissions.reports || staffPermissions.canAccessReports);
+    if (perm === 'settings') return Boolean(staffPermissions.settings || staffPermissions.canAccessSettings);
+    if (perm === 'customers') return Boolean(staffPermissions.customers || staffPermissions.canAccessLedgers);
+    if (perm === 'suppliers') return Boolean(staffPermissions.suppliers || staffPermissions.canAccessLedgers);
+    return Boolean(staffPermissions[perm]);
+  };
+
+  const quickCardPermMap: Record<string, keyof StaffModulePermissions> = {
+    new_sale: 'newSale',
+    old_sale: 'oldSale',
+    new_purchase: 'newPurchase',
+    old_purchase: 'oldPurchase',
+    stock: 'stock',
+    products: 'products',
+    customers_mgmt: 'customers',
+    customers_udhaar: 'customers',
+    customer_ledgers: 'customers',
+    suppliers: 'suppliers',
+    supplier_payments: 'suppliers',
+    supplier_ledgers: 'suppliers',
+    daily_hisab: 'reports',
+    expenses: 'expenses',
+    sale_returns: 'oldSale',
+    purchase_returns: 'oldPurchase',
+    sales_reports: 'reports',
+    purchase_reports: 'reports',
+    profit_reports: 'reports',
+    stock_reports: 'reports',
+    barcode_mgmt: 'products',
+    staff_management: 'settings',
+    device_management: 'settings',
+    qr_connection: 'settings',
+    printer_settings: 'printing',
+    app_settings: 'settings',
+    backup_restore: 'settings',
+    security_login: 'settings',
+    cctv: 'settings',
+  };
+
+  const sidebarPermMap: Record<string, keyof StaffModulePermissions | undefined> = {
+    Home: undefined,
+    'New Sale': 'newSale',
+    'Old Sale': 'oldSale',
+    'New Purchase': 'newPurchase',
+    'Old Purchase': 'oldPurchase',
+    'Stock Management': 'stock',
+    'Products Management': 'products',
+    'Customers Management': 'customers',
+    'Customer Udhaar': 'customers',
+    'Suppliers Management': 'suppliers',
+    'Supplier Payments': 'suppliers',
+    'Daily Hisab': 'reports',
+    'Customer Ledger': 'customers',
+    'Supplier Ledger': 'suppliers',
+    Expenses: 'expenses',
+    'Purchase Return': 'oldPurchase',
+    'Sale Return': 'oldSale',
+    'Sales Reports': 'reports',
+    'Purchase Reports': 'reports',
+    'Profit & Loss Reports': 'reports',
+    'Stock Reports': 'reports',
+    'Staff Management': 'settings',
+    'Device Management': 'settings',
+    'Barcode Management': 'products',
+    'QR Code Connection': 'settings',
+    'Printer Settings': 'printing',
+    'Application Settings': 'settings',
+    'Backup & Restore': 'settings',
+    'Security & Login': 'settings',
+    CCTV: 'settings',
+  };
+
+  const visibleQuickCards = quickActionCards.filter((card) => hasPerm(quickCardPermMap[card.id]));
+  const visibleSidebarItems = sidebarNavItems.filter((item) => hasPerm(sidebarPermMap[item.id]));
+  const visibleSubmenuSections = submenuSections
+    .map((sec) => ({
+      ...sec,
+      items: sec.items.filter((it) => hasPerm(it.permKey)),
+    }))
+    .filter((sec) => sec.items.length > 0);
 
   return (
     <div className="flex-1 min-h-full bg-[#022c16] text-white flex flex-col font-sans">
@@ -556,7 +712,7 @@ export const HomePage: React.FC<HomePageProps> = ({
           </div>
         </div>
 
-        {/* Center: Mart Identity & Shop ID Badge */}
+        {/* Center: Mart Identity, Shop ID & Live Multi-Device Sync Pill */}
         <div className="hidden md:flex items-center gap-2.5 px-3.5 py-1.5 rounded-2xl bg-[#03361b] border border-amber-500/30 shadow-inner">
           <div className="w-7 h-7 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center">
             <Store className="w-4 h-4" />
@@ -566,9 +722,48 @@ export const HomePage: React.FC<HomePageProps> = ({
               {branding.storeName || 'WAQAS MART'}
             </span>
             <span className="text-[10px] text-amber-300 font-mono font-bold block">
-              Shop ID: {shopId}
+              Shop ID: {shopId} · Currency: PKR (Rs.)
             </span>
           </div>
+          {syncStatus && (
+            <button
+              type="button"
+              onClick={onSyncNow}
+              title={syncStatus.conflicts[0]?.message || 'Live Multi-Device Sync Status (Click to Sync Now)'}
+              className={`ml-1 px-2.5 py-1 rounded-xl text-[10px] font-black flex items-center gap-1.5 border cursor-pointer transition-all ${
+                syncStatus.conflicts.length > 0
+                  ? 'bg-red-500/20 border-red-400 text-red-200'
+                  : !syncStatus.isOnline
+                  ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+                  : syncStatus.networkStatus === 'syncing' || syncStatus.pendingCount > 0
+                  ? 'bg-sky-500/20 border-sky-400 text-sky-200'
+                  : 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  syncStatus.conflicts.length > 0
+                    ? 'bg-red-400 animate-ping'
+                    : !syncStatus.isOnline
+                    ? 'bg-amber-400'
+                    : 'bg-emerald-400 animate-pulse'
+                }`}
+              />
+              <span>
+                {syncStatus.conflicts.length > 0
+                  ? `Conflict (${syncStatus.conflicts.length})`
+                  : !syncStatus.isOnline
+                  ? `Offline${syncStatus.pendingCount > 0 ? ` · ${syncStatus.pendingCount} Queued` : ''}`
+                  : syncStatus.networkStatus === 'syncing'
+                  ? 'Syncing...'
+                  : syncStatus.pendingCount > 0
+                  ? `Outbox (${syncStatus.pendingCount})`
+                  : syncStatus.sseConnected
+                  ? 'Live Sync On'
+                  : 'Connected'}
+              </span>
+            </button>
+          )}
         </div>
 
         {/* Right: Install App + Download App + Fullscreen Button + Software Owner / User Profile Pill & Dropdown */}
@@ -577,8 +772,8 @@ export const HomePage: React.FC<HomePageProps> = ({
 
           {/* Download Full App Package */}
           <a
-            href="/download"
-            download="Waqas-Mart-POS.zip"
+            href="/download?v=3.0.0"
+            download="WAQAS-POS-SOFTWARE-Latest.zip"
             className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-md active:scale-95 border border-amber-300"
             title="Download Offline App Package (ڈاؤنلوڈ مکمل ایپ فائل)"
           >
@@ -614,10 +809,12 @@ export const HomePage: React.FC<HomePageProps> = ({
             </div>
             <div className="hidden sm:block text-left">
               <div className="text-xs font-black text-white leading-tight">
-                {currentUser?.displayName || 'Muhammad Waqas'}
+                {authUser?.fullName || currentUser?.displayName || 'Shop Account'}
               </div>
               <div className="text-[10px] text-amber-400 font-bold leading-tight">
-                {branding.storeName || 'WAQAS MART'}
+                {authUser?.role === 'STAFF'
+                  ? 'Staff Account'
+                  : branding.storeName || 'WAQAS MART'}
               </div>
             </div>
             <ChevronDown className="w-4 h-4 text-amber-400 shrink-0" />
@@ -628,38 +825,42 @@ export const HomePage: React.FC<HomePageProps> = ({
             <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-amber-500/30 rounded-2xl shadow-2xl p-2 z-50 text-xs space-y-1 animate-in fade-in zoom-in-95 duration-100">
               <div className="p-3 border-b border-slate-800 text-slate-300">
                 <p className="font-bold text-white text-sm truncate">
-                  {currentUser?.displayName || 'Muhammad Waqas'}
+                  {authUser?.fullName || currentUser?.displayName || 'Shop Account'}
                 </p>
                 <p className="text-[11px] text-amber-400 truncate">
-                  {branding.storeName || 'WAQAS MART'}
+                  {branding.storeName || 'WAQAS MART'} · {authUser?.role || 'POS TERMINAL'}
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileDropdownOpen(false);
-                  onOpenSettings();
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-slate-200 hover:text-white hover:bg-slate-800 font-semibold cursor-pointer"
-              >
-                <User className="w-4 h-4 text-emerald-400" />
-                <span>Mart Owner Profile</span>
-              </button>
+              {hasPerm('settings') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileDropdownOpen(false);
+                    onOpenSettings();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-slate-200 hover:text-white hover:bg-slate-800 font-semibold cursor-pointer"
+                >
+                  <User className="w-4 h-4 text-emerald-400" />
+                  <span>Mart Owner Profile</span>
+                </button>
+              )}
 
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileDropdownOpen(false);
-                  onOpenSettings();
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-slate-200 hover:text-white hover:bg-slate-800 font-semibold cursor-pointer"
-              >
-                <Settings className="w-4 h-4 text-blue-400" />
-                <span>Store Branding Settings</span>
-              </button>
+              {hasPerm('settings') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileDropdownOpen(false);
+                    onOpenSettings();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-slate-200 hover:text-white hover:bg-slate-800 font-semibold cursor-pointer"
+                >
+                  <Settings className="w-4 h-4 text-blue-400" />
+                  <span>Store Branding Settings</span>
+                </button>
+              )}
 
-              {onOpenPrinterSettings && (
+              {onOpenPrinterSettings && hasPerm('printing') && (
                 <button
                   type="button"
                   onClick={() => {
@@ -673,17 +874,33 @@ export const HomePage: React.FC<HomePageProps> = ({
                 </button>
               )}
 
-              <button
-                type="button"
-                onClick={() => {
-                  setProfileDropdownOpen(false);
-                  onNavigate('New Sale POS');
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-slate-200 hover:text-white hover:bg-slate-800 font-semibold cursor-pointer"
-              >
-                <Monitor className="w-4 h-4 text-amber-400" />
-                <span>Launch POS Terminal</span>
-              </button>
+              {hasPerm('newSale') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileDropdownOpen(false);
+                    onNavigate('New Sale POS');
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-slate-200 hover:text-white hover:bg-slate-800 font-semibold cursor-pointer"
+                >
+                  <Monitor className="w-4 h-4 text-amber-400" />
+                  <span>Launch POS Terminal</span>
+                </button>
+              )}
+
+              {onSignOut && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileDropdownOpen(false);
+                    onSignOut();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-red-300 hover:text-white hover:bg-red-900/60 font-bold cursor-pointer border-t border-slate-800 mt-1 pt-2.5"
+                >
+                  <LogOut className="w-4 h-4 text-red-400" />
+                  <span>Sign Out</span>
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -725,7 +942,7 @@ export const HomePage: React.FC<HomePageProps> = ({
 
           {/* Navigation Items List */}
           <nav className="flex-1 overflow-y-auto p-2.5 space-y-1 text-xs">
-            {sidebarNavItems.map((item) => {
+            {visibleSidebarItems.map((item) => {
               const Icon = item.icon;
               const isActive = item.active;
               return (
@@ -895,7 +1112,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             {/* Left 9-10 Columns: Clean 20 White Rounded Cards */}
             <div className="xl:col-span-10 bg-white rounded-3xl p-4 sm:p-6 shadow-2xl border border-slate-200">
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-3.5">
-                {quickActionCards.map((card) => {
+                {visibleQuickCards.map((card) => {
                   const Icon = card.icon;
                   return (
                     <button
@@ -977,7 +1194,7 @@ export const HomePage: React.FC<HomePageProps> = ({
 
               {/* Submenu category selector tabs */}
               <div className="flex items-center gap-1 overflow-x-auto max-w-full pb-1">
-                {submenuSections.map((sec) => (
+                {visibleSubmenuSections.map((sec) => (
                   <button
                     key={sec.id}
                     type="button"
@@ -995,30 +1212,31 @@ export const HomePage: React.FC<HomePageProps> = ({
             </div>
 
             {/* Active Submenu Links Grid */}
-            {submenuSections
-              .filter((sec) => sec.id === activeSubmenuTab)
-              .map((sec) => (
-                <div key={sec.id} className="space-y-2 animate-in fade-in duration-150">
-                  <h4 className="text-xs font-bold text-emerald-800 uppercase tracking-wider">
-                    {sec.title}
-                  </h4>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5">
-                    {sec.items.map((subItem, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={subItem.onClick}
-                        className="p-3 bg-slate-50 hover:bg-emerald-50 rounded-xl border border-slate-200 hover:border-emerald-400 text-left transition-all active:scale-95 cursor-pointer group flex items-center justify-between"
-                      >
-                        <span className="text-xs font-bold text-slate-800 group-hover:text-emerald-800">
-                          {subItem.label}
-                        </span>
-                        <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-600 group-hover:translate-x-0.5 transition-transform" />
-                      </button>
-                    ))}
-                  </div>
+            {(visibleSubmenuSections.some((sec) => sec.id === activeSubmenuTab)
+              ? visibleSubmenuSections.filter((sec) => sec.id === activeSubmenuTab)
+              : visibleSubmenuSections.slice(0, 1)
+            ).map((sec) => (
+              <div key={sec.id} className="space-y-2 animate-in fade-in duration-150">
+                <h4 className="text-xs font-bold text-emerald-800 uppercase tracking-wider">
+                  {sec.title}
+                </h4>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5">
+                  {sec.items.map((subItem, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={subItem.onClick}
+                      className="p-3 bg-slate-50 hover:bg-emerald-50 rounded-xl border border-slate-200 hover:border-emerald-400 text-left transition-all active:scale-95 cursor-pointer group flex items-center justify-between"
+                    >
+                      <span className="text-xs font-bold text-slate-800 group-hover:text-emerald-800">
+                        {subItem.label}
+                      </span>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-600 group-hover:translate-x-0.5 transition-transform" />
+                    </button>
+                  ))}
                 </div>
-              ))}
+              </div>
+            ))}
           </section>
 
           {/* ========================================================== */}

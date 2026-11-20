@@ -85,8 +85,8 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
               )}
 
               <a
-                href="/download"
-                download="Waqas-Mart-POS.zip"
+                href="/download?v=3.0.0"
+                download="WAQAS-POS-SOFTWARE-Latest.zip"
                 className="w-full py-3 px-4 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
               >
                 <Download className="w-4 h-4" />

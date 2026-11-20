@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Calendar,
   Search,
@@ -28,7 +28,14 @@ import {
   Package,
   AlertTriangle,
 } from 'lucide-react';
-import { SaleTransaction, SaleReturn, Product, PurchaseTransaction, StoreBranding } from '../types/pos';
+import {
+  SaleTransaction,
+  SaleReturn,
+  Product,
+  PurchaseTransaction,
+  ExpenseEntry,
+  StoreBranding,
+} from '../types/pos';
 import { formatRs } from '../data/defaultProducts';
 import { WaqasBrandingCard } from './WaqasBrandingCard';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
@@ -39,11 +46,14 @@ interface SaleSummaryPageProps {
   saleReturns?: SaleReturn[];
   products?: Product[];
   purchases?: PurchaseTransaction[];
+  expenses?: ExpenseEntry[];
+  initialTab?: 'sales' | 'purchase' | 'profit' | 'stock';
   branding?: StoreBranding;
   onSelectInvoiceToPrint: (transaction: SaleTransaction) => void;
   onNavigate: (page: string) => void;
   activeNav?: string;
   onBackToHome?: () => void;
+  canViewCostAndProfit?: boolean;
 }
 
 type QuickDateFilter =
@@ -62,18 +72,26 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
   saleReturns = [],
   products = [],
   purchases = [],
+  expenses = [],
+  initialTab = 'sales',
   branding,
   onSelectInvoiceToPrint,
   onNavigate,
   activeNav = 'Daily Hisab',
   onBackToHome,
+  canViewCostAndProfit = true,
 }) => {
   // Format YYYY-MM-DD
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
-  // Report Tab: Sales Summary vs Inventory & Negative Stock Report
-  const [activeReportTab, setActiveReportTab] = useState<'sales' | 'inventory_stock'>('sales');
+  // Report Tab: Sales Reports | Purchase Reports | Profit & Loss Reports | Stock Reports
+  const safeInitialTab = !canViewCostAndProfit && initialTab === 'profit' ? 'sales' : initialTab;
+  const [activeReportTab, setActiveReportTab] = useState<'sales' | 'purchase' | 'profit' | 'stock'>(safeInitialTab);
   const [negativeStockOnlyFilter, setNegativeStockOnlyFilter] = useState<boolean>(false);
+
+  useEffect(() => {
+    setActiveReportTab(!canViewCostAndProfit && initialTab === 'profit' ? 'sales' : initialTab);
+  }, [initialTab, canViewCostAndProfit]);
 
   // Date Filters
   const [fromDate, setFromDate] = useState<string>(todayStr);
@@ -422,20 +440,49 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  // Print Report Handler (Sales/Purchase/Profit OR Inventory Stock depending on tab)
-  const handlePrintReport = async () => {
-    setIsPrinting(true);
-    setPrintFeedback(null);
+  // Date-filtered Purchases & Expenses for Purchase and Profit & Loss Reports
+  const filteredPurchases = useMemo(() => {
+    return purchases.filter((p) => {
+      const raw = p.purchaseDate || '';
+      const iso = raw.includes('/')
+        ? (() => {
+            const pts = raw.split('/');
+            return pts.length === 3 ? `${pts[2]}-${pts[1].padStart(2, '0')}-${pts[0].padStart(2, '0')}` : raw;
+          })()
+        : raw.split('T')[0];
+      if (iso) {
+        if (fromDate && iso < fromDate) return false;
+        if (toDate && iso > toDate) return false;
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchInv = (p.purchaseInvoiceNo || '').toLowerCase().includes(q);
+        const matchSup = (p.supplierName || '').toLowerCase().includes(q);
+        const matchSupInv = (p.supplierInvoiceNo || '').toLowerCase().includes(q);
+        return matchInv || matchSup || matchSupInv;
+      }
+      return true;
+    });
+  }, [purchases, fromDate, toDate, searchQuery]);
 
-    if (activeReportTab === 'inventory_stock') {
-      const targetProducts = filteredStockReportItems.map((item) => item.product);
-      const label = negativeStockOnlyFilter ? 'Negative Stock Only' : 'Inventory & Stock Report';
-      const res = await printStockReport(targetProducts, label, branding);
-      setPrintFeedback({ ok: res.ok, text: res.message });
-      setIsPrinting(false);
-      return;
-    }
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter((e) => {
+      const raw = e.date || '';
+      const iso = raw.includes('/')
+        ? (() => {
+            const pts = raw.split('/');
+            return pts.length === 3 ? `${pts[2]}-${pts[1].padStart(2, '0')}-${pts[0].padStart(2, '0')}` : raw;
+          })()
+        : raw.split('T')[0];
+      if (iso) {
+        if (fromDate && iso < fromDate) return false;
+        if (toDate && iso > toDate) return false;
+      }
+      return true;
+    });
+  }, [expenses, fromDate, toDate]);
 
+  const profitLossSummary = useMemo(() => {
     let totalCogs = 0;
     filteredTransactions.forEach((tx) => {
       tx.items?.forEach((it) => {
@@ -444,35 +491,61 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
       });
     });
 
-    const filteredPurchases = purchases.filter((p) => {
-      if (!p.purchaseDate) return true;
-      const iso = p.purchaseDate.includes('/')
-        ? (() => {
-            const pts = p.purchaseDate.split('/');
-            return pts.length === 3 ? `${pts[2]}-${pts[1].padStart(2, '0')}-${pts[0].padStart(2, '0')}` : p.purchaseDate;
-          })()
-        : p.purchaseDate;
-      if (fromDate && iso < fromDate) return false;
-      if (toDate && iso > toDate) return false;
-      return true;
-    });
-
     const totalPurchaseSpend = filteredPurchases.reduce((s, p) => s + (Number(p.grandTotal) || 0), 0);
-    const grossProfit = summaryCalculations.grossSales - totalCogs;
-    const netProfit = summaryCalculations.netSales - totalCogs;
+    const totalPurchasePaid = filteredPurchases.reduce((s, p) => s + (Number(p.amountPaid) || 0), 0);
+    const totalPurchaseDue = Math.max(0, totalPurchaseSpend - totalPurchasePaid);
+    const totalExpensesAmount = filteredExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+
+    const grossProfit = summaryCalculations.netSales - totalCogs;
+    const netProfit = grossProfit - totalExpensesAmount;
+    const marginPct = summaryCalculations.netSales > 0
+      ? (netProfit / summaryCalculations.netSales) * 100
+      : 0;
+
+    return {
+      totalCogs,
+      totalPurchaseSpend,
+      totalPurchasePaid,
+      totalPurchaseDue,
+      totalExpensesAmount,
+      grossProfit,
+      netProfit,
+      marginPct,
+    };
+  }, [filteredTransactions, filteredPurchases, filteredExpenses, summaryCalculations]);
+
+  // Print Report Handler (Sales / Purchase / Profit & Loss / Stock Report)
+  const handlePrintReport = async () => {
+    setIsPrinting(true);
+    setPrintFeedback(null);
+
+    if (activeReportTab === 'stock') {
+      const targetProducts = filteredStockReportItems.map((item) => item.product);
+      const label = negativeStockOnlyFilter ? 'Negative Stock Only' : 'Inventory & Stock Report';
+      const res = await printStockReport(targetProducts, label, branding);
+      setPrintFeedback({ ok: res.ok, text: res.message });
+      setIsPrinting(false);
+      return;
+    }
+
+    const titleMap: Record<'sales' | 'purchase' | 'profit', string> = {
+      sales: `Sales Report (${activeQuickFilter})`,
+      purchase: `Purchase Report (${activeQuickFilter})`,
+      profit: `Profit & Loss Report (${activeQuickFilter})`,
+    };
 
     const res = await printSalesProfitReport(
       {
-        reportTitle: `Sales, Purchase & Profit Report (${activeQuickFilter})`,
+        reportTitle: titleMap[activeReportTab],
         dateLabel: `${fromDate} to ${toDate}`,
         totalRevenue: summaryCalculations.netSales,
-        totalCogs,
-        grossProfit,
-        netProfit,
+        totalCogs: canViewCostAndProfit ? profitLossSummary.totalCogs : 0,
+        grossProfit: canViewCostAndProfit ? profitLossSummary.grossProfit : 0,
+        netProfit: canViewCostAndProfit ? profitLossSummary.netProfit : 0,
         totalRefunds: summaryCalculations.totalReturns,
-        totalPurchaseSpend,
+        totalPurchaseSpend: canViewCostAndProfit ? profitLossSummary.totalPurchaseSpend : 0,
         transactions: filteredTransactions,
-        purchases: filteredPurchases,
+        purchases: canViewCostAndProfit ? filteredPurchases : [],
       },
       branding
     );
@@ -596,38 +669,63 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
       {/* WAQAS MART Dual Profile Cards (Software Owner & Mart Owner) */}
       <WaqasBrandingCard variant="banner" />
 
-      {/* Report Switcher Tabs (Sales Summary vs Inventory & Negative Stock Report) */}
-      <div className="flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200 shadow-xs max-w-xl">
+      {/* Report Switcher Tabs: Sales | Purchase | Profit & Loss | Stock */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 shadow-xs gap-1.5">
         <button
           type="button"
           onClick={() => setActiveReportTab('sales')}
-          className={`flex-1 py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer ${
+          className={`py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
             activeReportTab === 'sales'
               ? 'bg-[#005bb5] text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900'
+              : 'text-slate-600 hover:text-slate-900 bg-white/60'
           }`}
         >
           <TrendingUp className="w-4 h-4" />
-          <span>Sales & Returns Summary (سیل خلاصہ)</span>
+          <span>Sales Reports</span>
         </button>
         <button
           type="button"
-          onClick={() => setActiveReportTab('inventory_stock')}
-          className={`flex-1 py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer ${
-            activeReportTab === 'inventory_stock'
+          onClick={() => setActiveReportTab('purchase')}
+          className={`py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+            activeReportTab === 'purchase'
               ? 'bg-[#005bb5] text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900'
+              : 'text-slate-600 hover:text-slate-900 bg-white/60'
           }`}
         >
-          <Package className="w-4 h-4 text-amber-300" />
-          <span>Stock & Negative Stock Report ({stockReportItems.filter((i) => i.isNegative).length})</span>
+          <ShoppingCart className="w-4 h-4" />
+          <span>Purchase Reports</span>
+        </button>
+        {canViewCostAndProfit && (
+          <button
+            type="button"
+            onClick={() => setActiveReportTab('profit')}
+            className={`py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+              activeReportTab === 'profit'
+                ? 'bg-[#005bb5] text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 bg-white/60'
+            }`}
+          >
+            <DollarSign className="w-4 h-4" />
+            <span>Profit & Loss</span>
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setActiveReportTab('stock')}
+          className={`py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+            activeReportTab === 'stock'
+              ? 'bg-[#005bb5] text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 bg-white/60'
+          }`}
+        >
+          <Package className="w-4 h-4" />
+          <span>Stock Reports ({stockReportItems.filter((i) => i.isNegative).length})</span>
         </button>
       </div>
 
-      {activeReportTab === 'sales' ? (
+      {activeReportTab !== 'stock' && (
         <>
-          {/* ============================================================== */}
-          {/* 2. DATE FILTERS & QUICK BUTTONS MATCHING SCREENSHOT 1          */}
+          {/* Shared Date Filters for Sales, Purchase & Profit Reports */}
           {/* ============================================================== */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-xs space-y-3">
         <div className="flex flex-wrap items-center gap-3">
@@ -778,6 +876,130 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
         </div>
       </div>
 
+      {activeReportTab === 'purchase' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
+              <span className="text-[11px] font-bold text-slate-500 uppercase block">Purchase Invoices</span>
+              <span className="text-xl font-black text-slate-900">{filteredPurchases.length}</span>
+            </div>
+            <div className="bg-blue-50 p-3.5 rounded-2xl border border-blue-200 shadow-xs">
+              <span className="text-[11px] font-bold text-blue-700 uppercase block">Total Purchase Spend</span>
+              <span className="text-xl font-black text-blue-900">{formatRs(profitLossSummary.totalPurchaseSpend)}</span>
+            </div>
+            <div className="bg-emerald-50 p-3.5 rounded-2xl border border-emerald-200 shadow-xs">
+              <span className="text-[11px] font-bold text-emerald-700 uppercase block">Total Paid to Suppliers</span>
+              <span className="text-xl font-black text-emerald-800">{formatRs(profitLossSummary.totalPurchasePaid)}</span>
+            </div>
+            <div className="bg-red-50 p-3.5 rounded-2xl border border-red-200 shadow-xs">
+              <span className="text-[11px] font-bold text-red-700 uppercase block">Purchase Balance Due</span>
+              <span className="text-xl font-black text-red-700">{formatRs(profitLossSummary.totalPurchaseDue)}</span>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="overflow-x-auto max-h-[520px]">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-[#005bb5] text-white font-bold uppercase text-[11px] sticky top-0">
+                  <tr>
+                    <th className="py-3 px-3">Date</th>
+                    <th className="py-3 px-3">Purchase Invoice #</th>
+                    <th className="py-3 px-3">Supplier</th>
+                    <th className="py-3 px-3 text-center">Items</th>
+                    <th className="py-3 px-3 text-right">Grand Total</th>
+                    <th className="py-3 px-3 text-right">Paid</th>
+                    <th className="py-3 px-3 text-right">Due</th>
+                    <th className="py-3 px-3 text-center">Method</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredPurchases.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-12 text-center text-slate-400">
+                        No purchase bills recorded for {fromDate} to {toDate}.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredPurchases.map((pur) => {
+                      const due = Math.max(0, (Number(pur.grandTotal) || 0) - (Number(pur.amountPaid) || 0));
+                      return (
+                        <tr key={pur.id || pur.purchaseInvoiceNo} className="hover:bg-slate-50">
+                          <td className="py-2.5 px-3 font-mono text-slate-600">{pur.purchaseDate}</td>
+                          <td className="py-2.5 px-3 font-mono font-bold text-blue-700">{pur.purchaseInvoiceNo}</td>
+                          <td className="py-2.5 px-3 font-bold text-slate-900">{pur.supplierName || 'General Supplier'}</td>
+                          <td className="py-2.5 px-3 text-center">{pur.items?.length || 0}</td>
+                          <td className="py-2.5 px-3 text-right font-mono font-black text-slate-900">{formatRs(pur.grandTotal || 0)}</td>
+                          <td className="py-2.5 px-3 text-right font-mono text-emerald-700 font-bold">{formatRs(pur.amountPaid || 0)}</td>
+                          <td className="py-2.5 px-3 text-right font-mono text-red-600 font-bold">{formatRs(due)}</td>
+                          <td className="py-2.5 px-3 text-center uppercase text-[10px] font-bold">{pur.paymentMethod}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {canViewCostAndProfit && activeReportTab === 'profit' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 shadow-xs">
+              <span className="text-[11px] font-bold text-blue-800 uppercase block">Net Sales Revenue</span>
+              <span className="text-xl font-black text-blue-950">{formatRs(summaryCalculations.netSales)}</span>
+            </div>
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 shadow-xs">
+              <span className="text-[11px] font-bold text-slate-600 uppercase block">Cost of Goods Sold (COGS)</span>
+              <span className="text-xl font-black text-slate-900">{formatRs(profitLossSummary.totalCogs)}</span>
+            </div>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 shadow-xs">
+              <span className="text-[11px] font-bold text-emerald-800 uppercase block">Gross Profit</span>
+              <span className="text-xl font-black text-emerald-800">{formatRs(profitLossSummary.grossProfit)}</span>
+            </div>
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 shadow-xs">
+              <span className="text-[11px] font-bold text-rose-800 uppercase block">Operating Expenses</span>
+              <span className="text-xl font-black text-rose-700">{formatRs(profitLossSummary.totalExpensesAmount)}</span>
+            </div>
+            <div className={`rounded-2xl p-4 shadow-sm border ${profitLossSummary.netProfit >= 0 ? 'bg-emerald-700 text-white border-emerald-800' : 'bg-red-700 text-white border-red-800'}`}>
+              <span className="text-[11px] font-bold uppercase block opacity-90">
+                Net {profitLossSummary.netProfit >= 0 ? 'Profit' : 'Loss'} ({profitLossSummary.marginPct.toFixed(1)}%)
+              </span>
+              <span className="text-xl font-black">{formatRs(profitLossSummary.netProfit)}</span>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 space-y-2.5 text-xs">
+            <h3 className="font-black text-sm text-slate-900">Income Statement Summary ({fromDate} to {toDate})</h3>
+            <div className="flex justify-between py-1.5 border-b border-slate-100">
+              <span className="text-slate-600 font-semibold">Gross Sales ({summaryCalculations.numberOfInvoices} invoices)</span>
+              <span className="font-mono font-bold text-slate-900">{formatRs(summaryCalculations.grossSales)}</span>
+            </div>
+            <div className="flex justify-between py-1.5 border-b border-slate-100">
+              <span className="text-slate-600 font-semibold">Less: Discounts & Sale Returns</span>
+              <span className="font-mono font-bold text-amber-700">- {formatRs(summaryCalculations.discounts + summaryCalculations.totalReturns)}</span>
+            </div>
+            <div className="flex justify-between py-1.5 border-b border-slate-100">
+              <span className="text-slate-600 font-semibold">Less: Cost of Goods Sold (Purchase Cost Basis)</span>
+              <span className="font-mono font-bold text-slate-800">- {formatRs(profitLossSummary.totalCogs)}</span>
+            </div>
+            <div className="flex justify-between py-1.5 border-b border-slate-100">
+              <span className="text-slate-600 font-semibold">Less: Operating Expenses ({filteredExpenses.length} entries)</span>
+              <span className="font-mono font-bold text-rose-700">- {formatRs(profitLossSummary.totalExpensesAmount)}</span>
+            </div>
+            <div className="flex justify-between pt-2 font-black text-sm">
+              <span className="text-slate-900">Net Profit / Loss</span>
+              <span className={profitLossSummary.netProfit >= 0 ? 'text-emerald-700 font-mono' : 'text-red-700 font-mono'}>
+                {formatRs(profitLossSummary.netProfit)}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeReportTab === 'sales' && (
+        <>
       {/* ============================================================== */}
       {/* 3. 9 COLORED SUMMARY CARDS MATCHING REQUIREMENTS               */}
       {/* ============================================================== */}
@@ -1339,8 +1561,12 @@ export const SaleSummaryPage: React.FC<SaleSummaryPageProps> = ({
           </div>
         </div>
       </div>
-    </>
-  ) : (
+        </>
+      )}
+        </>
+      )}
+
+      {activeReportTab === 'stock' && (
         /* ============================================================== */
         /* INVENTORY & NEGATIVE STOCK REPORT VIEW                        */
         /* ============================================================== */

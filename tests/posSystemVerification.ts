@@ -1,5 +1,12 @@
 import { buildPrintableHtmlDocument, buildSaleReceiptHtml } from '../src/utils/printerService';
-import { DEFAULT_RECEIPT_SETTINGS, DailyHisabRow, Product, SaleTransaction, StaffMember } from '../src/types/pos';
+import {
+  DEFAULT_RECEIPT_SETTINGS,
+  DEFAULT_STAFF_PERMISSIONS,
+  DailyHisabRow,
+  Product,
+  SaleTransaction,
+  StaffMember,
+} from '../src/types/pos';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -120,6 +127,7 @@ console.log('--- STARTING WAQAS POS COMPREHENSIVE FEATURE VERIFICATION ---');
     username: 'bilal',
     accountStatus: 'active',
     permissions: {
+      ...DEFAULT_STAFF_PERMISSIONS,
       canEditPrice: false,
       canGiveDiscount: false,
       canDeleteItems: false,

@@ -18,7 +18,14 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { DailyHisabRow, SaleTransaction, PurchaseTransaction, CustomerLedgerEntry, StoreBranding } from '../types/pos';
+import {
+  DailyHisabRow,
+  SaleTransaction,
+  PurchaseTransaction,
+  CustomerLedgerEntry,
+  ExpenseEntry,
+  StoreBranding,
+} from '../types/pos';
 import { WaqasBrandingCard } from './WaqasBrandingCard';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
 import { printDailyHisabReport } from '../utils/printerService';
@@ -27,6 +34,9 @@ interface DailyHisabExcelPageProps {
   transactions: SaleTransaction[];
   purchases: PurchaseTransaction[];
   customerLedgerEntries: CustomerLedgerEntry[];
+  expenses?: ExpenseEntry[];
+  serverDailyHisab?: Record<string, Record<string, Partial<DailyHisabRow>>>;
+  onSyncDailyHisab?: (data: Record<string, Record<string, Partial<DailyHisabRow>>>) => void;
   branding?: StoreBranding;
   onNavigateToSummary?: () => void;
   onNavigateToLedgers?: () => void;
@@ -40,6 +50,9 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
   transactions,
   purchases,
   customerLedgerEntries,
+  expenses = [],
+  serverDailyHisab,
+  onSyncDailyHisab,
   branding,
   onNavigateToSummary,
   onNavigateToLedgers,
@@ -59,16 +72,34 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
   ];
   const activeMonthName = monthNames[selectedMonth - 1];
 
-  // Saved overrides from localStorage
+  // Saved overrides from server + localStorage
   const [savedRecords, setSavedRecords] = useState<Record<string, Record<string, Partial<DailyHisabRow>>>>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_HISAB);
-      if (raw) return JSON.parse(raw);
+      const localParsed = raw ? JSON.parse(raw) : {};
+      if (serverDailyHisab && Object.keys(serverDailyHisab).length > 0) {
+        return { ...localParsed, ...serverDailyHisab };
+      }
+      return localParsed;
     } catch (e) {
       console.error('Failed to load Daily Hisab data:', e);
     }
-    return {};
+    return serverDailyHisab || {};
   });
+
+  useEffect(() => {
+    if (serverDailyHisab && Object.keys(serverDailyHisab).length > 0) {
+      setSavedRecords((prev) => {
+        const merged = { ...prev, ...serverDailyHisab };
+        try {
+          localStorage.setItem(STORAGE_KEY_HISAB, JSON.stringify(merged));
+        } catch {
+          // ignore
+        }
+        return merged;
+      });
+    }
+  }, [serverDailyHisab]);
 
   // Cell currently being edited: { dateIso, field }
   const [, setActiveCell] = useState<{ dateIso: string; field: keyof DailyHisabRow } | null>(null);
@@ -77,16 +108,18 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
   const [isPrinting, setIsPrinting] = useState<boolean>(false);
   const [printFeedback, setPrintFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
 
-  // Quick save to localStorage
+  // Quick save to localStorage + live sync to server
   const persistChanges = (updated: Record<string, Record<string, Partial<DailyHisabRow>>>) => {
     setSavedRecords(updated);
     try {
       localStorage.setItem(STORAGE_KEY_HISAB, JSON.stringify(updated));
-      setSaveSuccessMsg('All spreadsheet rows saved successfully!');
+      onSyncDailyHisab?.(updated);
+      setSaveSuccessMsg('All spreadsheet rows saved & synced!');
       setTimeout(() => setSaveSuccessMsg(null), 3000);
     } catch (e) {
-      console.error('Failed to save to localStorage:', e);
+      console.error('Failed to save Daily Hisab:', e);
     }
   };
 
@@ -95,18 +128,24 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
     return new Date(selectedYear, selectedMonth, 0).getDate();
   }, [selectedYear, selectedMonth]);
 
-  // Aggregate automated values from real business transactions
+  // Aggregate automated values from real business transactions & expenses
   const autoDataByDate = useMemo(() => {
     const map: Record<string, {
       dailySale: number;
       dailyPurchase: number;
       dailyCredit: number;
       dailyRecovery: number;
+      dailyExpenses: number;
     }> = {};
+
+    const ensure = (dIso: string) => {
+      if (!map[dIso]) {
+        map[dIso] = { dailySale: 0, dailyPurchase: 0, dailyCredit: 0, dailyRecovery: 0, dailyExpenses: 0 };
+      }
+    };
 
     // 1. Sales
     for (const tx of transactions) {
-      // Parse ISO date from transaction dateTime (e.g. "24 Oct 2026, 01:25 pm" or standard date)
       let dIso = '';
       try {
         const parsed = new Date(tx.dateTime);
@@ -118,7 +157,6 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
       }
 
       if (!dIso) {
-        // Check if date format has dd/mm/yyyy
         const parts = tx.dateTime.split(',')[0].trim().split(' ');
         if (parts.length >= 3) {
           const day = parts[0].padStart(2, '0');
@@ -131,9 +169,7 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
       }
 
       if (dIso) {
-        if (!map[dIso]) {
-          map[dIso] = { dailySale: 0, dailyPurchase: 0, dailyCredit: 0, dailyRecovery: 0 };
-        }
+        ensure(dIso);
         map[dIso].dailySale += tx.grandTotal || 0;
         if (tx.paymentMethod === 'credit') {
           const paidCash = tx.cashTendered || 0;
@@ -147,9 +183,7 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
     for (const p of purchases) {
       const dIso = p.purchaseDate; // YYYY-MM-DD
       if (dIso) {
-        if (!map[dIso]) {
-          map[dIso] = { dailySale: 0, dailyPurchase: 0, dailyCredit: 0, dailyRecovery: 0 };
-        }
+        ensure(dIso);
         map[dIso].dailyPurchase += p.grandTotal || 0;
       }
     }
@@ -163,16 +197,29 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
           return '';
         })();
         if (dIso) {
-          if (!map[dIso]) {
-            map[dIso] = { dailySale: 0, dailyPurchase: 0, dailyCredit: 0, dailyRecovery: 0 };
-          }
+          ensure(dIso);
           map[dIso].dailyRecovery += le.debit;
         }
       }
     }
 
+    // 4. Expenses
+    for (const exp of expenses) {
+      const raw = exp.date || '';
+      const dIso = raw.includes('/')
+        ? (() => {
+            const parts = raw.split('/');
+            return parts.length === 3 ? `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}` : '';
+          })()
+        : raw.split('T')[0];
+      if (dIso) {
+        ensure(dIso);
+        map[dIso].dailyExpenses += Number(exp.amount) || 0;
+      }
+    }
+
     return map;
-  }, [transactions, purchases, customerLedgerEntries]);
+  }, [transactions, purchases, customerLedgerEntries, expenses]);
 
   // Compute all rows for the month with sequential Opening & Closing Cash
   const computedRows: DailyHisabRow[] = useMemo(() => {
@@ -193,6 +240,7 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
         dailyPurchase: 0,
         dailyCredit: 0,
         dailyRecovery: 0,
+        dailyExpenses: 0,
       };
 
       // 1. Opening Cash
@@ -222,7 +270,7 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
       const dailyCredit = saved.dailyCredit !== undefined ? Number(saved.dailyCredit) : auto.dailyCredit;
       const dailyRecovery = saved.dailyRecovery !== undefined ? Number(saved.dailyRecovery) : auto.dailyRecovery;
       const dailyKitchen = saved.dailyKitchen !== undefined ? Number(saved.dailyKitchen) : 0;
-      const dailyExpenses = saved.dailyExpenses !== undefined ? Number(saved.dailyExpenses) : 0;
+      const dailyExpenses = saved.dailyExpenses !== undefined ? Number(saved.dailyExpenses) : auto.dailyExpenses;
       const details = saved.details !== undefined ? String(saved.details) : '';
 
       // 3. Closing Cash Accounting Formula specified by user:
@@ -330,12 +378,11 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
   };
 
   // Reset current month overrides back to purely automated state
-  const handleResetMonth = () => {
-    if (window.confirm(`Reset manual edits for ${activeMonthName} ${selectedYear} and recalculate automatically?`)) {
-      const nextSaved = { ...savedRecords };
-      delete nextSaved[monthKey];
-      persistChanges(nextSaved);
-    }
+  const handleConfirmResetMonth = () => {
+    const nextSaved = { ...savedRecords };
+    delete nextSaved[monthKey];
+    persistChanges(nextSaved);
+    setShowResetConfirm(false);
   };
 
   // Export to Excel CSV
@@ -625,15 +672,35 @@ export const DailyHisabExcelPage: React.FC<DailyHisabExcelPageProps> = ({
               <span>Preview</span>
             </button>
 
-            <button
-              type="button"
-              onClick={handleResetMonth}
-              className="px-3 py-2 bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded-xl font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-              title="Reset any manual cell overrides for this month"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reset Auto</span>
-            </button>
+            {showResetConfirm ? (
+              <div className="flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-xl px-2.5 py-1.5">
+                <span className="text-[11px] font-bold text-red-800">Reset {activeMonthName}?</span>
+                <button
+                  type="button"
+                  onClick={handleConfirmResetMonth}
+                  className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold cursor-pointer"
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowResetConfirm(false)}
+                  className="px-2 py-1 bg-white border border-slate-200 text-slate-700 rounded-lg font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(true)}
+                className="px-3 py-2 bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded-xl font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="Reset any manual cell overrides for this month"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset Auto</span>
+              </button>
+            )}
           </div>
         </div>
 

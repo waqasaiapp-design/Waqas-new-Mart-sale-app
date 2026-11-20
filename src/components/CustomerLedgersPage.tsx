@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Users,
   Search,
@@ -41,6 +41,7 @@ interface CustomerLedgersPageProps {
   customers: Customer[];
   ledgerEntries: CustomerLedgerEntry[];
   branding?: StoreBranding;
+  initialTab?: 'customers' | 'udhaar' | 'ledger';
   onSaveCustomer: (customer: Customer) => void;
   onDeleteCustomer: (customerId: string) => void;
   onSaveLedgerEntry: (entry: CustomerLedgerEntry) => void;
@@ -56,6 +57,7 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
   customers,
   ledgerEntries,
   branding,
+  initialTab = 'udhaar',
   onSaveCustomer,
   onDeleteCustomer,
   onSaveLedgerEntry,
@@ -72,6 +74,11 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
   // Search & Filter
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'balance' | 'name' | 'recent'>('balance');
+  const [onlyWithUdhaar, setOnlyWithUdhaar] = useState<boolean>(initialTab === 'udhaar');
+
+  useEffect(() => {
+    setOnlyWithUdhaar(initialTab === 'udhaar');
+  }, [initialTab]);
 
   // Modals state
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
@@ -100,8 +107,12 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
   const [entryAmount, setEntryAmount] = useState<number | ''>('');
   const [entryPaymentMethod, setEntryPaymentMethod] = useState('Cash');
 
-  // Success Feedback & Printing State
+  // Success Feedback & Printing & Inline Confirmation State
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null);
+  const [entryToDeleteId, setEntryToDeleteId] = useState<string | null>(null);
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [printFeedback, setPrintFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -164,6 +175,9 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
   const filteredCustomers = useMemo(() => {
     return customersWithStats
       .filter((c) => {
+        if (onlyWithUdhaar && c.currentBalance <= 0 && c.entriesCount === 0 && customersWithStats.some((x) => x.currentBalance > 0)) {
+          return false;
+        }
         const q = searchQuery.toLowerCase().trim();
         if (!q) return true;
         return (
@@ -177,7 +191,7 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
         if (sortBy === 'name') return a.name.localeCompare(b.name);
         return 0;
       });
-  }, [customersWithStats, searchQuery, sortBy]);
+  }, [customersWithStats, searchQuery, sortBy, onlyWithUdhaar]);
 
   // Active selected customer details
   const activeCustomer = useMemo(() => {
@@ -212,7 +226,7 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
     if (!file) return;
 
     if (file.size > 2 * 1024 * 1024) {
-      alert('Photo size is too large (max 2MB)');
+      setFormError('Photo size is too large (max 2MB).');
       return;
     }
 
@@ -226,6 +240,7 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
 
   // Open Create Customer Modal
   const openNewCustomerModal = () => {
+    setFormError(null);
     setEditingCustomer(null);
     setCustName('');
     setCustPhone('');
@@ -237,6 +252,7 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
 
   // Open Edit Customer Modal
   const openEditCustomerModal = (customer: Customer) => {
+    setFormError(null);
     setEditingCustomer(customer);
     setCustName(customer.name);
     setCustPhone(customer.phone || '');
@@ -250,7 +266,7 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
   const handleSaveCustomerSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!custName.trim()) {
-      alert('Customer Name is required!');
+      setFormError('Customer Name is required!');
       return;
     }
 
@@ -302,9 +318,10 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
 
     const amt = typeof entryAmount === 'number' ? entryAmount : parseFloat(entryAmount) || 0;
     if (amt <= 0) {
-      alert('Please enter a valid positive amount.');
+      setFormError('Please enter a valid positive amount.');
       return;
     }
+    setFormError(null);
 
     // Convert date to DD/MM/YYYY
     let dFormatted = entryDate;
@@ -332,27 +349,14 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
     showToast(entryType === 'credit' ? 'New credit (udhar) recorded' : 'Customer recovery recorded successfully');
   };
 
-  // Delete Customer Handler
+  // Delete Customer Handler (opens inline confirmation modal)
   const handleDeleteCustomerClick = (customer: Customer) => {
-    if (
-      window.confirm(
-        `Are you sure you want to delete customer "${customer.name}"? This will delete all financial history for this customer.`
-      )
-    ) {
-      onDeleteCustomer(customer.id);
-      if (selectedCustomerId === customer.id) {
-        setSelectedCustomerId(null);
-      }
-      showToast('Customer deleted');
-    }
+    setCustomerToDelete(customer);
   };
 
-  // Delete Ledger Entry Handler
+  // Delete Ledger Entry Handler (uses inline row confirmation)
   const handleDeleteEntryClick = (entryId: string) => {
-    if (window.confirm('Are you sure you want to delete this ledger transaction entry?')) {
-      onDeleteLedgerEntry(entryId);
-      showToast('Ledger entry removed');
-    }
+    setEntryToDeleteId(entryId);
   };
 
   // Export Customer Statement CSV
@@ -705,24 +709,47 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
                           {entry.runningBalance.toFixed(0)}
                         </td>
                         <td className="py-2.5 px-3 text-center whitespace-nowrap font-sans">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => openEditEntryModal(entry)}
-                              className="p-1 hover:bg-slate-200 text-slate-500 rounded cursor-pointer"
-                              title="Edit entry"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteEntryClick(entry.id)}
-                              className="p-1 hover:bg-red-50 text-red-500 rounded cursor-pointer"
-                              title="Delete entry"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                          {entryToDeleteId === entry.id ? (
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onDeleteLedgerEntry(entry.id);
+                                  setEntryToDeleteId(null);
+                                  showToast('Ledger entry removed');
+                                }}
+                                className="px-2 py-0.5 bg-red-600 text-white rounded text-[10px] font-bold cursor-pointer"
+                              >
+                                Delete
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEntryToDeleteId(null)}
+                                className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded text-[10px] font-bold cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => openEditEntryModal(entry)}
+                                className="p-1 hover:bg-slate-200 text-slate-500 rounded cursor-pointer"
+                                title="Edit entry"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteEntryClick(entry.id)}
+                                className="p-1 hover:bg-red-50 text-red-500 rounded cursor-pointer"
+                                title="Delete entry"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -804,23 +831,38 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
               </button>
 
               {customers.length > 0 && onDeleteAllCustomers && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        `Are you sure you want to delete all ${customers.length} customers and their ledgers?\nThis action cannot be undone.\nکیا آپ تمام ${customers.length} گاہک اور ان کے کھاتے ڈیلیٹ کرنا چاہتے ہیں؟`
-                      )
-                    ) {
-                      onDeleteAllCustomers();
-                    }
-                  }}
-                  className="px-3.5 py-2 bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-                  title="Delete all customers and their ledgers"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  <span>All Delete ({customers.length})</span>
-                </button>
+                showDeleteAllConfirm ? (
+                  <div className="flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-xl px-2.5 py-1.5">
+                    <span className="text-[11px] font-bold text-red-800">Delete all {customers.length}?</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onDeleteAllCustomers();
+                        setShowDeleteAllConfirm(false);
+                      }}
+                      className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowDeleteAllConfirm(false)}
+                      className="px-2 py-1 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-bold cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteAllConfirm(true)}
+                    className="px-3.5 py-2 bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                    title="Delete all customers and their ledgers"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>All Delete ({customers.length})</span>
+                  </button>
+                )
               )}
             </div>
           </div>
@@ -1700,6 +1742,45 @@ export const CustomerLedgersPage: React.FC<CustomerLedgersPageProps> = ({
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {customerToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-5 shadow-2xl border border-red-200 space-y-4">
+            <h4 className="font-black text-slate-900 text-sm">Delete Customer "{customerToDelete.name}"?</h4>
+            <p className="text-xs text-slate-600">
+              This will permanently remove this customer and all financial history for this account.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCustomerToDelete(null)}
+                className="px-3.5 py-1.5 rounded-xl border border-slate-300 text-xs font-bold text-slate-700 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteCustomer(customerToDelete.id);
+                  if (selectedCustomerId === customerToDelete.id) setSelectedCustomerId(null);
+                  setCustomerToDelete(null);
+                  showToast('Customer deleted');
+                }}
+                className="px-4 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold cursor-pointer"
+              >
+                Confirm Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {formError && (
+        <div className="fixed bottom-4 right-4 z-[60] bg-red-600 text-white px-4 py-2.5 rounded-xl shadow-lg text-xs font-bold flex items-center gap-2">
+          <span>{formError}</span>
+          <button type="button" onClick={() => setFormError(null)} className="font-black cursor-pointer">×</button>
         </div>
       )}
       </div>

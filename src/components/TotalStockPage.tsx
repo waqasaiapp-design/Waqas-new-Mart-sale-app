@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Package,
   Layers,
@@ -24,7 +24,16 @@ import {
   History,
   AlertCircle,
 } from 'lucide-react';
-import { Product, CategoryInfo, StockTransaction, StoreBranding } from '../types/pos';
+import {
+  Product,
+  CategoryInfo,
+  StockTransaction,
+  StoreBranding,
+  SaleTransaction,
+  PurchaseTransaction,
+  SaleReturn,
+  PurchaseReturn,
+} from '../types/pos';
 import { formatRs } from '../data/defaultProducts';
 import { WaqasBrandingCard } from './WaqasBrandingCard';
 import { FullScreenPageHeader } from './FullScreenPageHeader';
@@ -34,6 +43,13 @@ interface TotalStockPageProps {
   products: Product[];
   categories: CategoryInfo[];
   stockHistory?: StockTransaction[];
+  transactions?: SaleTransaction[];
+  purchases?: PurchaseTransaction[];
+  saleReturns?: SaleReturn[];
+  purchaseReturns?: PurchaseReturn[];
+  initialViewMode?: 'stock' | 'products';
+  scannedBarcode?: string | null;
+  onClearScannedBarcode?: () => void;
   branding?: StoreBranding;
   onSaveProduct: (product: Product) => void;
   onDeleteProduct: (productId: string) => void;
@@ -42,12 +58,20 @@ interface TotalStockPageProps {
   onOpenScanner: () => void;
   onNavigateToPos?: () => void;
   onBackToHome?: () => void;
+  canViewCostAndProfit?: boolean;
 }
 
 export const TotalStockPage: React.FC<TotalStockPageProps> = ({
   products,
   categories,
   stockHistory = [],
+  transactions = [],
+  purchases = [],
+  saleReturns = [],
+  purchaseReturns = [],
+  initialViewMode = 'stock',
+  scannedBarcode = null,
+  onClearScannedBarcode,
   branding,
   onSaveProduct,
   onDeleteProduct,
@@ -56,13 +80,27 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
   onOpenScanner,
   onNavigateToPos,
   onBackToHome,
+  canViewCostAndProfit = true,
 }) => {
   // Search & Filter State
+  const [viewMode, setViewMode] = useState<'stock' | 'products'>(initialViewMode);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All Categories');
   const [showNegativeStockOnly, setShowNegativeStockOnly] = useState<boolean>(false);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 10;
+
+  useEffect(() => {
+    setViewMode(initialViewMode);
+  }, [initialViewMode]);
+
+  useEffect(() => {
+    if (scannedBarcode && scannedBarcode.trim()) {
+      setSearchQuery(scannedBarcode.trim());
+      setCurrentPage(1);
+      onClearScannedBarcode?.();
+    }
+  }, [scannedBarcode, onClearScannedBarcode]);
 
   // Modals
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -176,6 +214,66 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
     setEditError(null);
   };
 
+  // Per-product movement ledger calculation (Opening/Previous, Purchased, Sold, Returned)
+  const productLedgerStats = useMemo(() => {
+    const stats = new Map<
+      string,
+      { purchasedQty: number; soldQty: number; returnedQty: number; openingStock: number }
+    >();
+
+    for (const p of products) {
+      let purchasedQty = 0;
+      let soldQty = 0;
+      let saleRetQty = 0;
+      let purchaseRetQty = 0;
+
+      for (const pur of purchases) {
+        for (const it of pur.items || []) {
+          if (it.productId === p.id || (p.barcode && it.barcode === p.barcode)) {
+            purchasedQty += Number(it.quantity) || 0;
+          }
+        }
+      }
+
+      for (const tx of transactions) {
+        for (const it of tx.items || []) {
+          if (it.product?.id === p.id || (p.barcode && it.product?.barcode === p.barcode)) {
+            soldQty += Number(it.quantity) || 0;
+          }
+        }
+      }
+
+      for (const sr of saleReturns) {
+        for (const it of sr.items || []) {
+          if (it.productId === p.id || (p.barcode && it.barcode === p.barcode)) {
+            saleRetQty += Number(it.quantity) || 0;
+          }
+        }
+      }
+
+      for (const pr of purchaseReturns) {
+        for (const it of pr.items || []) {
+          if (it.productId === p.id || (p.barcode && it.barcode === p.barcode)) {
+            purchaseRetQty += Number(it.quantity) || 0;
+          }
+        }
+      }
+
+      const returnedQty = saleRetQty - purchaseRetQty;
+      const current = Number(p.stock) || 0;
+      const openingStock = current - purchasedQty + soldQty - returnedQty;
+
+      stats.set(p.id, {
+        purchasedQty,
+        soldQty,
+        returnedQty: saleRetQty + purchaseRetQty,
+        openingStock,
+      });
+    }
+
+    return stats;
+  }, [products, purchases, transactions, saleReturns, purchaseReturns]);
+
   // Save Edit
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -185,6 +283,16 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
       setEditError('Product name is required.');
       return;
     }
+    const cleanBarcode = editBarcode.trim() || editingProduct.barcode;
+    if (cleanBarcode) {
+      const duplicate = products.find(
+        (p) => p.id !== editingProduct.id && (p.barcode || '').trim().toLowerCase() === cleanBarcode.toLowerCase()
+      );
+      if (duplicate) {
+        setEditError(`Duplicate barcode "${cleanBarcode}" already exists on "${duplicate.name}".`);
+        return;
+      }
+    }
     if (editCostPrice < 0 || editPrice <= 0) {
       setEditError('Please enter valid purchase and sale prices.');
       return;
@@ -193,7 +301,7 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
     const updated: Product = {
       ...editingProduct,
       name: editName.trim(),
-      barcode: editBarcode.trim() || editingProduct.barcode,
+      barcode: cleanBarcode,
       category: editCategory,
       unit: editUnit,
       costPrice: Number(editCostPrice),
@@ -259,8 +367,8 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
     <div className="flex-1 flex flex-col w-full min-h-full bg-[#f8fafc] font-sans">
       {/* Universal Fullscreen Header with Back/Exit & Fullscreen Toggle */}
       <FullScreenPageHeader
-        title="Total Stock & Products"
-        urduTitle="ٹوٹل اسٹاک اور پراڈکٹس"
+        title={viewMode === 'products' ? 'Products Management' : 'Total Stock & Ledger'}
+        urduTitle={viewMode === 'products' ? 'پراڈکٹس مینیجمنٹ' : 'ٹوٹل اسٹاک اور کھاتہ'}
         icon={<Layers className="w-5 h-5 text-white" />}
         onBackToHome={() => {
           if (onBackToHome) onBackToHome();
@@ -343,11 +451,35 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
               <Package className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className="text-xl sm:text-2xl font-black text-[#1e293b] tracking-tight">
-                Total Stock Inventory
-              </h1>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-xl sm:text-2xl font-black text-[#1e293b] tracking-tight">
+                  {viewMode === 'products' ? 'Products Catalog Management' : 'Total Stock Inventory & Ledger'}
+                </h1>
+                <div className="inline-flex bg-slate-200/80 p-0.5 rounded-xl border border-slate-300">
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('stock')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-black cursor-pointer transition ${
+                      viewMode === 'stock' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Stock Ledger
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('products')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-black cursor-pointer transition ${
+                      viewMode === 'products' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Products List
+                  </button>
+                </div>
+              </div>
               <p className="text-xs text-slate-500 font-medium">
-                Real-time store catalog, stock quantities, valuation & negative inventory tracking
+                {viewMode === 'products'
+                  ? 'Manage product names, SKUs, barcodes, categories, purchase & sale pricing'
+                  : 'Real-time opening/previous stock, purchases, sales, returns, valuation & movement audit'}
               </p>
             </div>
           </div>
@@ -384,18 +516,20 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
             </div>
           </div>
 
-          {/* Card 3: Total Value (Purple) */}
-          <div className="bg-[#8b5cf6] rounded-2xl p-2.5 sm:p-3 text-white flex items-center gap-2.5 sm:gap-3.5 shadow-sm min-w-0">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-white/20 flex items-center justify-center shrink-0">
-              <span className="font-black text-sm sm:text-base">Rs</span>
+          {/* Card 3: Total Value (Purple - Hidden if cost visibility is restricted) */}
+          {canViewCostAndProfit && (
+            <div className="bg-[#8b5cf6] rounded-2xl p-2.5 sm:p-3 text-white flex items-center gap-2.5 sm:gap-3.5 shadow-sm min-w-0">
+              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-white/20 flex items-center justify-center shrink-0">
+                <span className="font-black text-sm sm:text-base">Rs</span>
+              </div>
+              <div>
+                <span className="text-[10px] sm:text-xs font-semibold text-purple-100 block">Total Value</span>
+                <span className="text-base sm:text-xl font-black tracking-tight leading-none">
+                  {formatRs(totalStockValue)}
+                </span>
+              </div>
             </div>
-            <div>
-              <span className="text-[10px] sm:text-xs font-semibold text-purple-100 block">Total Value</span>
-              <span className="text-base sm:text-xl font-black tracking-tight leading-none">
-                {formatRs(totalStockValue)}
-              </span>
-            </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -563,26 +697,38 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
       {/* ============================================================== */}
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs flex-1 flex flex-col min-h-[360px] overflow-hidden">
         <div className="overflow-x-auto overflow-y-auto flex-1">
-          <table className="w-full text-left border-collapse text-xs sm:text-sm min-w-[760px]">
-            {/* Solid Green Header matching screenshot */}
+          <table className="w-full text-left border-collapse text-xs sm:text-sm min-w-[980px]">
+            {/* Solid Green Header */}
             <thead>
               <tr className="bg-[#00994d] text-white font-bold text-xs">
-                <th className="py-3.5 px-3 text-center w-10">#</th>
-                <th className="py-3.5 px-3 text-center w-16">Image</th>
-                <th className="py-3.5 px-3 min-w-[140px]">Product Name</th>
-                <th className="py-3.5 px-3 min-w-[110px]">Barcode</th>
-                <th className="py-3.5 px-3 text-center min-w-[110px]">Category</th>
-                <th className="py-3.5 px-3 text-center w-14">Qty</th>
-                <th className="py-3.5 px-3 text-right min-w-[95px]">Purchase Price</th>
-                <th className="py-3.5 px-3 text-right min-w-[90px]">Sale Price</th>
-                <th className="py-3.5 px-3 text-right min-w-[100px]">Total Value</th>
-                <th className="py-3.5 px-3 text-center w-24">Action</th>
+                <th className="py-3.5 px-2.5 text-center w-10">#</th>
+                <th className="py-3.5 px-2.5 text-center w-14">Image</th>
+                <th className="py-3.5 px-3 min-w-[150px]">Product Name</th>
+                <th className="py-3.5 px-2.5 min-w-[115px]">Barcode / SKU</th>
+                <th className="py-3.5 px-2.5 text-center min-w-[100px]">Category</th>
+                {viewMode === 'stock' && (
+                  <>
+                    <th className="py-3.5 px-2 text-center">Prev Stock</th>
+                    <th className="py-3.5 px-2 text-center">Purchased</th>
+                    <th className="py-3.5 px-2 text-center">Sold</th>
+                    <th className="py-3.5 px-2 text-center">Returned</th>
+                  </>
+                )}
+                <th className="py-3.5 px-2.5 text-center">Current Stock</th>
+                {canViewCostAndProfit && (
+                  <th className="py-3.5 px-2.5 text-right min-w-[85px]">Purchase Price</th>
+                )}
+                <th className="py-3.5 px-2.5 text-right min-w-[80px]">Sale Price</th>
+                {canViewCostAndProfit && (
+                  <th className="py-3.5 px-2.5 text-right min-w-[95px]">Stock Value</th>
+                )}
+                <th className="py-3.5 px-2.5 text-center w-28">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-12 text-center text-slate-400">
+                  <td colSpan={viewMode === 'stock' ? 14 : 10} className="py-12 text-center text-slate-400">
                     <Package className="w-10 h-10 mx-auto mb-2 text-slate-300" />
                     <p className="font-semibold text-slate-600">No products found</p>
                     <p className="text-xs text-slate-400 mt-0.5">
@@ -596,6 +742,12 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                 paginatedProducts.map((product, index) => {
                   const rowNumber = startIndex + index + 1;
                   const itemTotalValue = (product.stock || 0) * (product.costPrice || 0);
+                  const ledger = productLedgerStats.get(product.id) || {
+                    openingStock: product.stock || 0,
+                    purchasedQty: 0,
+                    soldQty: 0,
+                    returnedQty: 0,
+                  };
 
                   return (
                     <tr
@@ -603,12 +755,12 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                       className="hover:bg-slate-50/80 transition-colors group"
                     >
                       {/* 1. # */}
-                      <td className="py-3 px-3 text-center text-slate-500 font-medium">
+                      <td className="py-3 px-2.5 text-center text-slate-500 font-medium">
                         {rowNumber}
                       </td>
 
                       {/* 2. Image */}
-                      <td className="py-2.5 px-3 text-center">
+                      <td className="py-2.5 px-2.5 text-center">
                         <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-50 border border-slate-100 flex items-center justify-center mx-auto relative shadow-2xs">
                           {product.imageUrl ? (
                             <img
@@ -634,15 +786,18 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                         </div>
                       </td>
 
-                      {/* 4. Barcode */}
-                      <td className="py-3 px-3 font-mono text-slate-600 text-xs">
-                        {product.barcode}
+                      {/* 4. Barcode & SKU */}
+                      <td className="py-3 px-2.5 font-mono text-slate-600 text-xs">
+                        <div>{product.barcode}</div>
+                        {product.sku && (
+                          <div className="text-[10px] text-slate-400">SKU: {product.sku}</div>
+                        )}
                       </td>
 
-                      {/* 5. Category (Pill badge matching screenshot) */}
-                      <td className="py-3 px-3 text-center">
+                      {/* 5. Category */}
+                      <td className="py-3 px-2.5 text-center">
                         <span
-                          className={`inline-block px-3 py-1 rounded-md text-[11px] font-bold ${getCategoryBadgeClass(
+                          className={`inline-block px-2.5 py-1 rounded-md text-[11px] font-bold ${getCategoryBadgeClass(
                             product.category
                           )}`}
                         >
@@ -650,12 +805,30 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                         </span>
                       </td>
 
-                      {/* 6. Qty */}
-                      <td className="py-3 px-3 text-center">
+                      {/* Stock Ledger Breakdown Columns */}
+                      {viewMode === 'stock' && (
+                        <>
+                          <td className="py-3 px-2 text-center font-mono text-slate-600 tabular-nums">
+                            {ledger.openingStock}
+                          </td>
+                          <td className="py-3 px-2 text-center font-mono font-bold text-emerald-700 tabular-nums">
+                            +{ledger.purchasedQty}
+                          </td>
+                          <td className="py-3 px-2 text-center font-mono font-bold text-blue-700 tabular-nums">
+                            {ledger.soldQty}
+                          </td>
+                          <td className="py-3 px-2 text-center font-mono text-amber-700 tabular-nums">
+                            {ledger.returnedQty}
+                          </td>
+                        </>
+                      )}
+
+                      {/* Current Stock */}
+                      <td className="py-3 px-2.5 text-center">
                         {product.stock < 0 ? (
                           <span className="inline-flex items-center gap-1 font-black text-red-700 bg-red-100 border border-red-300 px-2 py-0.5 rounded-full text-xs shadow-2xs">
                             <AlertTriangle className="w-3 h-3 text-red-600 shrink-0" />
-                            <span>{product.stock} (Negative)</span>
+                            <span>{product.stock} (Neg)</span>
                           </span>
                         ) : (
                           <span
@@ -672,25 +845,40 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                         )}
                       </td>
 
-                      {/* 7. Purchase Price */}
-                      <td className="py-3 px-3 text-right font-semibold text-slate-700">
-                        {product.costPrice}
-                      </td>
+                      {/* Purchase Price */}
+                      {canViewCostAndProfit && (
+                        <td className="py-3 px-2.5 text-right font-semibold text-slate-700 tabular-nums">
+                          {product.costPrice}
+                        </td>
+                      )}
 
-                      {/* 8. Sale Price */}
-                      <td className="py-3 px-3 text-right font-semibold text-slate-700">
+                      {/* Sale Price */}
+                      <td className="py-3 px-2.5 text-right font-semibold text-slate-700 tabular-nums">
                         {product.price}
                       </td>
 
-                      {/* 9. Total Value */}
-                      <td className="py-3 px-3 text-right font-bold text-slate-900">
-                        {itemTotalValue.toLocaleString('en-PK')}
-                      </td>
+                      {/* Stock Value */}
+                      {canViewCostAndProfit && (
+                        <td className="py-3 px-2.5 text-right font-bold text-slate-900 tabular-nums">
+                          {itemTotalValue.toLocaleString('en-PK')}
+                        </td>
+                      )}
 
-                      {/* 10. Action (Green Edit + Red Delete) */}
-                      <td className="py-3 px-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          {/* Green Edit Icon Button matching screenshot */}
+                      {/* Action: History + Edit + Delete */}
+                      <td className="py-3 px-2.5 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHistoryQuery(product.name);
+                              setIsStockHistoryOpen(true);
+                            }}
+                            className="w-7 h-7 rounded-lg bg-teal-600 hover:bg-teal-700 text-white flex items-center justify-center transition-all shadow-2xs active:scale-90 cursor-pointer"
+                            title="View Product Stock Movement History"
+                          >
+                            <History className="w-3.5 h-3.5" />
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => handleOpenEdit(product)}
@@ -700,7 +888,6 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Red Delete Icon Button matching screenshot */}
                           <button
                             type="button"
                             onClick={() => setProductToDelete(product)}
@@ -964,19 +1151,21 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                   </select>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Purchase Price <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={editCostPrice}
-                    onChange={(e) => setEditCostPrice(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/30 font-bold text-slate-800"
-                    required
-                  />
-                </div>
+                {canViewCostAndProfit && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Purchase Price <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={editCostPrice}
+                      onChange={(e) => setEditCostPrice(Number(e.target.value))}
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/30 font-bold text-slate-800"
+                      required
+                    />
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -1029,12 +1218,14 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
               </div>
 
               {/* Total Stock Value Calculation */}
-              <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 flex items-center justify-between">
-                <span className="text-xs font-bold text-purple-900">Calculated Stock Value:</span>
-                <span className="text-sm font-black text-purple-700">
-                  {formatRs(editStock * editCostPrice)}
-                </span>
-              </div>
+              {canViewCostAndProfit && (
+                <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 flex items-center justify-between">
+                  <span className="text-xs font-bold text-purple-900">Calculated Stock Value:</span>
+                  <span className="text-sm font-black text-purple-700">
+                    {formatRs(editStock * editCostPrice)}
+                  </span>
+                </div>
+              )}
 
               {/* Buttons */}
               <div className="flex items-center justify-end gap-2 pt-2">
@@ -1088,10 +1279,12 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                   <span className="text-[11px] font-bold text-blue-800 block">Total Units</span>
                   <span className="text-xl font-black text-blue-900">{totalQuantity.toLocaleString()}</span>
                 </div>
-                <div className="p-3 bg-purple-50 rounded-2xl border border-purple-100">
-                  <span className="text-[11px] font-bold text-purple-800 block">Purchase Cost</span>
-                  <span className="text-base font-black text-purple-900">{formatRs(totalStockValue)}</span>
-                </div>
+                {canViewCostAndProfit && (
+                  <div className="p-3 bg-purple-50 rounded-2xl border border-purple-100">
+                    <span className="text-[11px] font-bold text-purple-800 block">Purchase Cost</span>
+                    <span className="text-base font-black text-purple-900">{formatRs(totalStockValue)}</span>
+                  </div>
+                )}
                 <div className="p-3 bg-amber-50 rounded-2xl border border-amber-100">
                   <span className="text-[11px] font-bold text-amber-800 block">Retail Value</span>
                   <span className="text-base font-black text-amber-900">{formatRs(totalRetailValue)}</span>
@@ -1099,22 +1292,24 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
               </div>
 
               {/* Profit potential */}
-              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-bold text-slate-500 block">Total Potential Gross Profit</span>
-                  <span className="text-lg font-black text-emerald-700">
-                    {formatRs(Math.max(0, totalRetailValue - totalStockValue))}
-                  </span>
+              {canViewCostAndProfit && (
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between">
+                  <div>
+                    <span className="text-xs font-bold text-slate-500 block">Total Potential Gross Profit</span>
+                    <span className="text-lg font-black text-emerald-700">
+                      {formatRs(Math.max(0, totalRetailValue - totalStockValue))}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-xs font-bold text-slate-500 block">Average Markup Margin</span>
+                    <span className="text-sm font-black text-slate-800">
+                      {totalStockValue > 0
+                        ? `${Math.round(((totalRetailValue - totalStockValue) / totalStockValue) * 100)}%`
+                        : '0%'}
+                    </span>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <span className="text-xs font-bold text-slate-500 block">Average Markup Margin</span>
-                  <span className="text-sm font-black text-slate-800">
-                    {totalStockValue > 0
-                      ? `${Math.round(((totalRetailValue - totalStockValue) / totalStockValue) * 100)}%`
-                      : '0%'}
-                  </span>
-                </div>
-              </div>
+              )}
 
               {/* Alerts summary: Low Stock & Out of Stock */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1267,14 +1462,16 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                     {filteredProducts.reduce((acc, p) => acc + (p.stock || 0), 0).toLocaleString()}
                   </span>
                 </div>
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Stock Valuation</span>
-                  <span className="text-lg font-black text-[#00994d]">
-                    {formatRs(
-                      filteredProducts.reduce((acc, p) => acc + ((p.stock || 0) * (p.costPrice || 0)), 0)
-                    )}
-                  </span>
-                </div>
+                {canViewCostAndProfit && (
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Stock Valuation</span>
+                    <span className="text-lg font-black text-[#00994d]">
+                      {formatRs(
+                        filteredProducts.reduce((acc, p) => acc + ((p.stock || 0) * (p.costPrice || 0)), 0)
+                      )}
+                    </span>
+                  </div>
+                )}
                 <div>
                   <span className="text-[10px] uppercase font-bold text-red-500 block">Negative Stock Items</span>
                   <span className="text-lg font-black text-red-600">
@@ -1294,9 +1491,13 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                     <th className="p-2 border border-slate-200 text-center">Unit</th>
                     <th className="p-2 border border-slate-200 text-center">Current Qty</th>
                     <th className="p-2 border border-slate-200 text-center">Status</th>
-                    <th className="p-2 border border-slate-200 text-right">Cost</th>
+                    {canViewCostAndProfit && (
+                      <th className="p-2 border border-slate-200 text-right">Cost</th>
+                    )}
                     <th className="p-2 border border-slate-200 text-right">Retail</th>
-                    <th className="p-2 border border-slate-200 text-right">Total Value</th>
+                    {canViewCostAndProfit && (
+                      <th className="p-2 border border-slate-200 text-right">Total Value</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -1319,11 +1520,15 @@ export const TotalStockPage: React.FC<TotalStockPageProps> = ({
                           <span className="text-emerald-700 font-medium">In Stock</span>
                         )}
                       </td>
-                      <td className="p-2 border border-slate-200 text-right">{p.costPrice}</td>
+                      {canViewCostAndProfit && (
+                        <td className="p-2 border border-slate-200 text-right">{p.costPrice}</td>
+                      )}
                       <td className="p-2 border border-slate-200 text-right">{p.price}</td>
-                      <td className="p-2 border border-slate-200 text-right font-black text-slate-900">
-                        {((p.stock || 0) * (p.costPrice || 0)).toLocaleString('en-PK')}
-                      </td>
+                      {canViewCostAndProfit && (
+                        <td className="p-2 border border-slate-200 text-right font-black text-slate-900">
+                          {((p.stock || 0) * (p.costPrice || 0)).toLocaleString('en-PK')}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

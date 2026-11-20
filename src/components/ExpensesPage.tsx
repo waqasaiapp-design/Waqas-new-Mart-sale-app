@@ -54,6 +54,9 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<ExpenseEntry | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
+  const [expenseToDeleteId, setExpenseToDeleteId] = useState<string | null>(null);
   const [isPrinting, setIsPrinting] = useState(false);
   const [printFeedback, setPrintFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -152,9 +155,10 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     const parsedAmount = parseFloat(amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      alert('Please enter a valid expense amount.');
+      setFormError('Please enter a valid expense amount.');
       return;
     }
 
@@ -278,22 +282,38 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
           </button>
 
           {expenses.length > 0 && onDeleteAllExpenses && (
-            <button
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `Are you sure you want to delete all ${expenses.length} expense records?\nکیا آپ تمام اخراجات ڈیلیٹ کرنا چاہتے ہیں؟`
-                  )
-                ) {
-                  onDeleteAllExpenses();
-                }
-              }}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-black active:scale-95 text-white font-bold text-xs rounded-xl flex items-center gap-1 shadow-xs transition-all cursor-pointer"
-              title="Delete all expenses"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>All Delete ({expenses.length})</span>
-            </button>
+            showDeleteAllConfirm ? (
+              <div className="flex items-center gap-1.5 bg-red-50 border border-red-200 px-2.5 py-1.5 rounded-xl">
+                <span className="text-[11px] font-bold text-red-700">Delete all {expenses.length}?</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDeleteAllExpenses();
+                    setShowDeleteAllConfirm(false);
+                  }}
+                  className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold rounded-lg cursor-pointer"
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteAllConfirm(false)}
+                  className="px-2 py-1 bg-white border border-slate-200 text-slate-700 text-[11px] font-bold rounded-lg cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowDeleteAllConfirm(true)}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-black active:scale-95 text-white font-bold text-xs rounded-xl flex items-center gap-1 shadow-xs transition-all cursor-pointer"
+                title="Delete all expenses"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>All Delete ({expenses.length})</span>
+              </button>
+            )
           )}
         </div>
       </div>
@@ -434,17 +454,36 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          onClick={() => {
-                            if (window.confirm('Delete this expense record?')) {
-                              onDeleteExpense(exp.id);
-                            }
-                          }}
-                          className="p-1.5 text-slate-400 hover:text-red-600 rounded hover:bg-slate-100 transition-colors"
-                          title="Delete Expense"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {expenseToDeleteId === exp.id ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onDeleteExpense(exp.id);
+                                setExpenseToDeleteId(null);
+                              }}
+                              className="px-2 py-1 bg-red-600 text-white rounded text-[10px] font-bold cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setExpenseToDeleteId(null)}
+                              className="px-2 py-1 bg-slate-100 text-slate-700 rounded text-[10px] font-bold cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setExpenseToDeleteId(exp.id)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+                            title="Delete Expense"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -475,6 +514,12 @@ export const ExpensesPage: React.FC<ExpensesPageProps> = ({
             </div>
 
             <form onSubmit={handleSave} className="space-y-3">
+              {formError && (
+                <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{formError}</span>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-600 mb-1">
                   Expense Category *

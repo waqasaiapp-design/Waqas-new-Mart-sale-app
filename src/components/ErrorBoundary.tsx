@@ -30,6 +30,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   private handleReset = () => {
     try {
+      localStorage.removeItem('waqas_pos_session_v1');
       localStorage.removeItem('waqas_mart_auth_session');
     } catch {}
     window.location.reload();

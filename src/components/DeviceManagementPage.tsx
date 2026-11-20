@@ -56,6 +56,7 @@ export const DeviceManagementPage: React.FC<DeviceManagementPageProps> = ({
   const [newName, setNewName] = useState<string>('');
   const [isUpdating, setIsUpdating] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [pendingDeviceAction, setPendingDeviceAction] = useState<{ type: 'revoke' | 'remove'; device: DeviceInfo } | null>(null);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
@@ -146,40 +147,44 @@ export const DeviceManagementPage: React.FC<DeviceManagementPageProps> = ({
   };
 
   // Revoke device access
-  const handleRevoke = async (dev: DeviceInfo) => {
-    if (!window.confirm(`Are you sure you want to REVOKE access for "${dev.deviceName}"? This device will be disconnected immediately.`)) {
-      return;
-    }
-    try {
-      const res = await safeFetchJson(`/api/devices/${dev.deviceId}/revoke`, { method: 'POST' });
-      const data = res.data;
-      if (data && data.success) {
-        showToast(`Access revoked for ${dev.deviceName}`, 'success');
-        fetchDevices();
-      } else {
-        showToast(data?.message || 'Failed to revoke', 'error');
-      }
-    } catch {
-      showToast('Error revoking device', 'error');
-    }
+  const handleRevoke = (dev: DeviceInfo) => {
+    setPendingDeviceAction({ type: 'revoke', device: dev });
   };
 
   // Remove device
-  const handleRemove = async (dev: DeviceInfo) => {
-    if (!window.confirm(`Remove "${dev.deviceName}" permanently from authorized devices list?`)) {
-      return;
-    }
+  const handleRemove = (dev: DeviceInfo) => {
+    setPendingDeviceAction({ type: 'remove', device: dev });
+  };
+
+  const executeDeviceAction = async () => {
+    if (!pendingDeviceAction) return;
+    const { type, device: dev } = pendingDeviceAction;
+    setIsUpdating(true);
     try {
-      const res = await safeFetchJson(`/api/devices/${dev.deviceId}`, { method: 'DELETE' });
-      const data = res.data;
-      if (data && data.success) {
-        showToast(`Device removed from system`, 'success');
-        fetchDevices();
+      if (type === 'revoke') {
+        const res = await safeFetchJson(`/api/devices/${dev.deviceId}/revoke`, { method: 'POST' });
+        const data = res.data;
+        if (data && data.success) {
+          showToast(`Access revoked for ${dev.deviceName}`, 'success');
+          fetchDevices();
+        } else {
+          showToast(data?.message || 'Failed to revoke', 'error');
+        }
       } else {
-        showToast(data?.message || 'Failed to remove', 'error');
+        const res = await safeFetchJson(`/api/devices/${dev.deviceId}`, { method: 'DELETE' });
+        const data = res.data;
+        if (data && data.success) {
+          showToast(`Device removed from system`, 'success');
+          fetchDevices();
+        } else {
+          showToast(data?.message || 'Failed to remove', 'error');
+        }
       }
     } catch {
-      showToast('Error removing device', 'error');
+      showToast(type === 'revoke' ? 'Error revoking device' : 'Error removing device', 'error');
+    } finally {
+      setIsUpdating(false);
+      setPendingDeviceAction(null);
     }
   };
 
@@ -563,6 +568,39 @@ export const DeviceManagementPage: React.FC<DeviceManagementPageProps> = ({
               >
                 {isUpdating ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
                 <span>Save Name</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Revoke / Remove Confirmation Modal */}
+      {pendingDeviceAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl border border-slate-200 space-y-4">
+            <h3 className="font-extrabold text-base text-slate-900">
+              {pendingDeviceAction.type === 'revoke' ? 'Revoke Terminal Access?' : 'Remove Terminal Permanently?'}
+            </h3>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              {pendingDeviceAction.type === 'revoke'
+                ? `Revoking "${pendingDeviceAction.device.deviceName}" disconnects it immediately from WAQAS MART live sync.`
+                : `Permanently remove "${pendingDeviceAction.device.deviceName}" from the authorized terminals list?`}
+            </p>
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setPendingDeviceAction(null)}
+                className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isUpdating}
+                onClick={executeDeviceAction}
+                className="py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs cursor-pointer disabled:opacity-50"
+              >
+                {pendingDeviceAction.type === 'revoke' ? 'Revoke Access' : 'Remove Device'}
               </button>
             </div>
           </div>

@@ -38,6 +38,11 @@ import {
   Store,
   KeyRound,
   LogOut,
+  RefreshCw,
+  Wifi,
+  WifiOff,
+  AlertTriangle,
+  CheckCircle2,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import {
@@ -68,11 +73,16 @@ import {
   StaffMember,
   CctvCamera,
   DvrNvrConfig,
-  SecurityConfig,
   PaymentMethod,
   StockTransaction,
   PrinterSettings,
   DEFAULT_PRINTER_SETTINGS,
+  DailyHisabRow,
+  StoreFullState,
+  SyncStatusSnapshot,
+  AuthSession,
+  StaffModulePermissions,
+  DEFAULT_STAFF_PERMISSIONS,
 } from './types/pos';
 import {
   SCREENSHOT_CATEGORIES,
@@ -114,13 +124,19 @@ import { ExpensesPage } from './components/ExpensesPage';
 import { PurchaseReturnsPage } from './components/PurchaseReturnsPage';
 import { CctvPage } from './components/CctvPage';
 import { AllStaffPage } from './components/AllStaffPage';
+import { BarcodeManagementPage } from './components/BarcodeManagementPage';
+import { BackupRestorePage } from './components/BackupRestorePage';
+import { QrConnectionPage } from './components/QrConnectionPage';
+import { SecuritySettingsPage } from './components/SecuritySettingsPage';
+import { SuperAdminDashboard } from './components/SuperAdminDashboard';
 import { LoginGateway } from './components/Auth/LoginGateway';
 import {
-  isAppUnlocked,
-  cleanupLegacyAuthStorage,
-} from './utils/martAuthSecurity';
+  purgeLegacyLockKeys,
+  fetchCurrentSession,
+  getStoredAuthSession,
+  logoutSession,
+} from './utils/authClient';
 import { calculateCartTotals } from './utils/oldSaleHelpers';
-import { AuthUser, ShopAccount, UserRole } from './types/pos';
 
 const STORAGE_KEYS = {
   INVENTORY: 'waqas_mart_inventory_v6',
@@ -134,7 +150,6 @@ const STORAGE_KEYS = {
   RETURNS: 'waqas_mart_sale_returns_v6',
   USER_PROFILE: 'waqas_mart_user_profile_v6',
   DEVICE_ID: 'waqas_mart_device_id_v6',
-  PIN_HASH: 'waqas_mart_app_pin_hash_v6',
   BRANDING: 'waqas_mart_branding_v6',
   RECEIPT_SETTINGS: 'waqas_mart_receipt_settings_v6',
   SUPPLIER_LEDGERS: 'waqas_mart_supplier_ledgers_v6',
@@ -143,9 +158,9 @@ const STORAGE_KEYS = {
   STAFF: 'waqas_mart_staff_v6',
   CCTV_CAMERAS: 'waqas_mart_cctv_cameras_v6',
   DVR_CONFIG: 'waqas_mart_dvr_config_v6',
-  SECURITY_CONFIG: 'waqas_mart_security_config_v6',
   STOCK_HISTORY: 'waqas_mart_stock_history_v1',
   PRINTER_SETTINGS: 'waqas_mart_printer_settings_v1',
+  ACTIVE_SHOP_ID: 'waqas_pos_active_shop_id',
 };
 
 // Purge legacy obsolete cached keys (IMPORTANT: NEVER remove waqas_mart_daily_hisab_v2!)
@@ -162,21 +177,20 @@ try {
 } catch {}
 
 export default function App() {
-  // Single Offline Password Lock — ALWAYS required on every new app launch
-  const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
-    cleanupLegacyAuthStorage();
-    return false;
+  // Single centralized authentication session (Super Admin, Shop Owner, Staff) or paired terminal
+  const [authSession, setAuthSession] = useState<AuthSession | null>(() => {
+    purgeLegacyLockKeys();
+    return getStoredAuthSession();
+  });
+  const [authChecked, setAuthChecked] = useState<boolean>(false);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const [isPairedTerminal, setIsPairedTerminal] = useState<boolean>(() => {
+    const dev = syncService.getDevice();
+    return Boolean(dev.sessionToken && dev.status !== 'revoked');
   });
 
   // Navigation: 'Home' | 'Sale POS' | 'Purchase Entry' | 'Total Stock' | etc.
   const [activeNav, setActiveNav] = useState<string>('Home');
-
-  const handleUnlockSuccess = () => {
-    if (isAppUnlocked()) {
-      setIsUnlocked(true);
-      setActiveNav('Home');
-    }
-  };
   const [mode, setMode] = useState<POSMode>('sale');
   const [isReceiptDesignerOpen, setIsReceiptDesignerOpen] = useState(false);
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(() => {
@@ -190,6 +204,7 @@ export default function App() {
   const handleSaveReceiptSettings = (newSettings: ReceiptSettings) => {
     setReceiptSettings(newSettings);
     localStorage.setItem(STORAGE_KEYS.RECEIPT_SETTINGS, JSON.stringify(newSettings));
+    syncService.syncReceiptSettings(newSettings);
   };
 
   // Products - Clean Zero State initially ("our pehle say app koi stok ya etam ya hisab naho sub zero hu")
@@ -322,6 +337,15 @@ export default function App() {
   });
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [scannedBarcodeForNewPos, setScannedBarcodeForNewPos] = useState<string | null>(null);
+  const [scannedBarcodeForPurchase, setScannedBarcodeForPurchase] = useState<string | null>(null);
+  const [scannedBarcodeForTools, setScannedBarcodeForTools] = useState<string | null>(null);
+  const [dailyHisab, setDailyHisab] = useState<Record<string, Record<string, Partial<DailyHisabRow>>>>(() => {
+    try {
+      const saved = localStorage.getItem('waqas_mart_daily_hisab_v2');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {};
+  });
 
   // Multi-Device & PWA states
   const [isConnectQrOpen, setIsConnectQrOpen] = useState(false);
@@ -329,6 +353,9 @@ export default function App() {
   const [isPwaInstallOpen, setIsPwaInstallOpen] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isRevoked, setIsRevoked] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot>(() => syncService.getStatusSnapshot());
+  const [isResetAllZeroConfirmOpen, setIsResetAllZeroConfirmOpen] = useState(false);
+  const [isConflictModalOpen, setIsConflictModalOpen] = useState(false);
 
   useEffect(() => {
     try {
@@ -551,31 +578,7 @@ export default function App() {
     }
   }, [dvrConfig]);
 
-  // 6. Security Config State (Master PIN & Biometric App Lock)
-  const [securityConfig, setSecurityConfig] = useState<SecurityConfig>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.SECURITY_CONFIG);
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return {
-      appLockEnabled: false,
-      biometricEnabled: false,
-      autoLockTimerMinutes: 5,
-      lockOnBackground: true,
-      masterPin: '',
-      restrictReports: false,
-      restrictSettings: false,
-      restrictDelete: true,
-    };
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.SECURITY_CONFIG, JSON.stringify(securityConfig));
-    } catch (e) {
-      console.warn('Failed to persist security config', e);
-    }
-  }, [securityConfig]);
+  // Old SecurityConfig local PIN/biometric locks removed permanently.
 
   // User Profile
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
@@ -604,98 +607,239 @@ export default function App() {
   // Device Info
   const [currentDevice, setCurrentDevice] = useState<DeviceInfo>(() => syncService.getDevice());
 
-  // Real-Time Synchronization Listener and Initial Server Fetch
-  useEffect(() => {
-    // Initial fetch from server
+  const applyServerStoreSnapshot = (serverStore: Partial<StoreFullState> | null | undefined) => {
+    if (!serverStore || typeof serverStore !== 'object') return;
+    if (Array.isArray(serverStore.products)) setProducts(serverStore.products);
+    if (Array.isArray(serverStore.categories) && serverStore.categories.length > 0) {
+      setCategories(serverStore.categories);
+    }
+    if (Array.isArray(serverStore.transactions)) setTransactions(serverStore.transactions);
+    if (Array.isArray(serverStore.purchases)) setPurchases(serverStore.purchases);
+    if (Array.isArray(serverStore.customers)) setCustomers(serverStore.customers);
+    if (Array.isArray(serverStore.customerLedgers)) setCustomerLedgerEntries(serverStore.customerLedgers);
+    if (Array.isArray(serverStore.saleReturns)) setSaleReturns(serverStore.saleReturns);
+    if (Array.isArray(serverStore.suppliers)) setSuppliers(serverStore.suppliers);
+    if (Array.isArray(serverStore.heldBills)) setHeldBills(serverStore.heldBills);
+    if (serverStore.branding) setBranding(serverStore.branding);
+    if (Array.isArray(serverStore.stockHistory)) setStockHistory(serverStore.stockHistory);
+    if (Array.isArray(serverStore.purchaseReturns)) setPurchaseReturns(serverStore.purchaseReturns);
+    if (Array.isArray(serverStore.supplierLedgers)) setSupplierLedgers(serverStore.supplierLedgers);
+    if (Array.isArray(serverStore.expenses)) setExpenses(serverStore.expenses);
+    if (Array.isArray(serverStore.staffList)) setStaffList(serverStore.staffList);
+    if (serverStore.dailyHisab && typeof serverStore.dailyHisab === 'object') {
+      setDailyHisab(serverStore.dailyHisab);
+      try {
+        localStorage.setItem('waqas_mart_daily_hisab_v2', JSON.stringify(serverStore.dailyHisab));
+      } catch {}
+    }
+    if (serverStore.receiptSettings) {
+      setReceiptSettings(serverStore.receiptSettings);
+      localStorage.setItem(STORAGE_KEYS.RECEIPT_SETTINGS, JSON.stringify(serverStore.receiptSettings));
+    }
+    if (serverStore.printerSettings) {
+      setPrinterSettings(serverStore.printerSettings);
+      savePrinterSettings(serverStore.printerSettings);
+    }
+  };
+
+  const clearLocalShopWorkspaceState = (nextShopId: string) => {
+    setProducts([]);
+    setTransactions([]);
+    setPurchases([]);
+    setHeldBills([]);
+    setCustomers([]);
+    setCustomerLedgerEntries([]);
+    setSaleReturns([]);
+    setSuppliers(INITIAL_SUPPLIERS);
+    setSupplierLedgers([]);
+    setExpenses([]);
+    setPurchaseReturns([]);
+    setStaffList([]);
+    setStockHistory([]);
+    setDailyHisab({});
+    setCart([]);
+    setDiscountAmount(0);
+    setTaxAmount(0);
+    setResumedHeldBillId(null);
+    setResumedNewSaleBill(null);
+    syncService.clearOfflineQueueForSwitch();
+    try {
+      [
+        STORAGE_KEYS.INVENTORY,
+        STORAGE_KEYS.TRANSACTIONS,
+        STORAGE_KEYS.PURCHASES,
+        STORAGE_KEYS.HELD_BILLS,
+        STORAGE_KEYS.CUSTOMERS,
+        STORAGE_KEYS.CUSTOMER_LEDGERS,
+        STORAGE_KEYS.RETURNS,
+        STORAGE_KEYS.SUPPLIERS,
+        STORAGE_KEYS.SUPPLIER_LEDGERS,
+        STORAGE_KEYS.EXPENSES,
+        STORAGE_KEYS.PURCHASE_RETURNS,
+        STORAGE_KEYS.STAFF,
+        STORAGE_KEYS.STOCK_HISTORY,
+        STORAGE_KEYS.BRANDING,
+        STORAGE_KEYS.RECEIPT_SETTINGS,
+        'waqas_mart_daily_hisab_v2',
+      ].forEach((k) => localStorage.removeItem(k));
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_SHOP_ID, nextShopId || '');
+    } catch {}
+  };
+
+  const applyAuthenticatedShopBootstrap = (session: AuthSession) => {
+    const targetShopId = session.user.shopId || session.shop?.id || '';
+    const prevShopId = localStorage.getItem(STORAGE_KEYS.ACTIVE_SHOP_ID) || '';
+    if (prevShopId && prevShopId !== targetShopId) {
+      clearLocalShopWorkspaceState(targetShopId);
+    } else {
+      try {
+        localStorage.setItem(STORAGE_KEYS.ACTIVE_SHOP_ID, targetShopId);
+      } catch {}
+    }
+
+    setCurrentUser((prev) => ({
+      ...prev,
+      id: session.user.id,
+      displayName: session.user.fullName,
+      email: session.user.email || session.user.username || prev.email,
+      phone: session.user.phone || prev.phone,
+      role: session.user.role,
+    }));
+
+    syncService.registerPrimaryDevice().then((dev) => {
+      if (dev) setCurrentDevice(dev);
+    });
+    syncService.connectSse();
     syncService.fetchServerStore().then((serverStore) => {
-      if (serverStore) {
-        if (serverStore.products && serverStore.products.length > 0) {
-          setProducts(serverStore.products);
+      if (serverStore) applyServerStoreSnapshot(serverStore);
+    });
+  };
+
+  const handleLoginSuccess = (session: AuthSession) => {
+    setAuthNotice(null);
+    setAuthSession(session);
+    setIsRevoked(false);
+    if (session.user.role === 'SUPER_ADMIN') {
+      syncService.closeSse();
+      return;
+    }
+    setActiveNav('Home');
+    applyAuthenticatedShopBootstrap(session);
+  };
+
+  const handlePairedSuccess = (device: DeviceInfo, storeState?: any) => {
+    clearLocalShopWorkspaceState(device.shopId || '');
+    setCurrentDevice(device);
+    setIsPairedTerminal(true);
+    setIsRevoked(false);
+    setAuthNotice(null);
+    setActiveNav('Home');
+    if (storeState) {
+      applyServerStoreSnapshot(storeState);
+    }
+    syncService.connectSse();
+  };
+
+  const handleSignOut = async () => {
+    await logoutSession();
+    syncService.closeSse();
+    clearLocalShopWorkspaceState('');
+    setAuthSession(null);
+    setIsPairedTerminal(false);
+    setIsRevoked(false);
+    setActiveNav('Home');
+  };
+
+  // Validate active session on initial load & subscribe to real-time shop SSE events
+  useEffect(() => {
+    purgeLegacyLockKeys();
+    const dev = syncService.getDevice();
+    const pairedOk = Boolean(dev.sessionToken && dev.status !== 'revoked');
+    setIsPairedTerminal(pairedOk);
+
+    let cancelled = false;
+    fetchCurrentSession()
+      .then((verifiedSession) => {
+        if (cancelled) return;
+        if (verifiedSession) {
+          setAuthSession(verifiedSession);
+          if (verifiedSession.user.role === 'SUPER_ADMIN') {
+            syncService.closeSse();
+          } else {
+            applyAuthenticatedShopBootstrap(verifiedSession);
+          }
+        } else {
+          setAuthSession(null);
+          if (pairedOk) {
+            syncService.connectSse();
+            syncService.fetchServerStore().then((serverStore) => {
+              if (serverStore) applyServerStoreSnapshot(serverStore);
+            });
+          } else {
+            syncService.closeSse();
+          }
         }
-        if (serverStore.transactions && serverStore.transactions.length > 0) {
-          setTransactions(serverStore.transactions);
-        }
-        if (serverStore.purchases && serverStore.purchases.length > 0) {
-          setPurchases(serverStore.purchases);
-        }
-        if (serverStore.customers && serverStore.customers.length > 0) {
-          setCustomers(serverStore.customers);
-        }
-        if (serverStore.customerLedgers && serverStore.customerLedgers.length > 0) {
-          setCustomerLedgerEntries(serverStore.customerLedgers);
-        }
-        if (serverStore.saleReturns && serverStore.saleReturns.length > 0) {
-          setSaleReturns(serverStore.saleReturns);
-        }
-        if (serverStore.suppliers && serverStore.suppliers.length > 0) {
-          setSuppliers(serverStore.suppliers);
-        }
-        if (serverStore.heldBills && serverStore.heldBills.length > 0) {
-          setHeldBills(serverStore.heldBills);
-        }
-        if (serverStore.branding) {
-          setBranding(serverStore.branding);
-        }
-        if (serverStore.stockHistory && serverStore.stockHistory.length > 0) {
-          setStockHistory(serverStore.stockHistory);
-        }
-        if (serverStore.purchaseReturns && serverStore.purchaseReturns.length > 0) {
-          setPurchaseReturns(serverStore.purchaseReturns);
-        }
-        if (serverStore.supplierLedgers && serverStore.supplierLedgers.length > 0) {
-          setSupplierLedgers(serverStore.supplierLedgers);
-        }
-        if (serverStore.expenses && serverStore.expenses.length > 0) {
-          setExpenses(serverStore.expenses);
-        }
-        if (serverStore.staffList && serverStore.staffList.length > 0) {
-          setStaffList(serverStore.staffList);
-        }
-        if (serverStore.printerSettings) {
-          setPrinterSettings(serverStore.printerSettings);
-          savePrinterSettings(serverStore.printerSettings);
-        }
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setAuthSession(null);
+        setIsPairedTerminal(false);
+        syncService.closeSse();
+        if (err?.message) setAuthNotice(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setAuthChecked(true);
+      });
+
+    const unsubscribeStatus = syncService.subscribeStatus((snap) => {
+      setSyncStatus(snap);
+      if (snap.isRevoked) {
+        setIsRevoked(true);
       }
     });
 
     // Real-time synchronization stream listener
     const unsubscribe = syncService.subscribe((event) => {
       const myDeviceId = syncService.getDevice().deviceId;
+      const isRemote = event.sourceDeviceId !== myDeviceId;
 
       if (event.type === 'sale:completed') {
-        const { transaction, updatedProducts, customerLedgers, stockHistory: srvHist } = event.payload || {};
-        if (transaction && event.sourceDeviceId !== myDeviceId) {
+        const { transaction, updatedProducts, customerLedgers, customers: srvCusts, stockHistory: srvHist } = event.payload || {};
+        if (transaction && isRemote) {
           setTransactions((prev) => {
             if (prev.some((t) => t.invoiceNumber === transaction.invoiceNumber)) return prev;
             return [transaction, ...prev];
           });
           if (Array.isArray(updatedProducts)) setProducts(updatedProducts);
+          if (Array.isArray(srvCusts)) setCustomers(srvCusts);
           if (Array.isArray(customerLedgers)) setCustomerLedgerEntries(customerLedgers);
           if (Array.isArray(srvHist)) setStockHistory(srvHist);
-          showToast(`⚡ Real-Time Sync: New sale #${transaction.invoiceNumber} recorded on another counter!`, 'info');
+          showToast(`Real-Time Sync: Sale #${transaction.invoiceNumber} synced from another terminal.`, 'info');
         }
       } else if (event.type === 'purchase:added' || event.type === 'purchase:updated') {
-        const { purchase, updatedProducts, stockHistory: srvHist } = event.payload || {};
-        if (purchase && event.sourceDeviceId !== myDeviceId) {
+        const { purchase, updatedProducts, suppliers: srvSup, stockHistory: srvHist } = event.payload || {};
+        if (purchase && isRemote) {
           setPurchases((prev) => {
             const exists = prev.some((p) => p.id === purchase.id || p.purchaseInvoiceNo === purchase.purchaseInvoiceNo);
             if (exists) return prev.map((p) => (p.id === purchase.id ? purchase : p));
             return [purchase, ...prev];
           });
           if (Array.isArray(updatedProducts)) setProducts(updatedProducts);
+          if (Array.isArray(srvSup)) setSuppliers(srvSup);
           if (Array.isArray(srvHist)) setStockHistory(srvHist);
-          showToast(`⚡ Real-Time Sync: Purchase #${purchase.purchaseInvoiceNo} synced.`, 'info');
+          showToast(`Real-Time Sync: Purchase #${purchase.purchaseInvoiceNo} synced.`, 'info');
         }
       } else if (event.type === 'purchase:deleted') {
-        const { purchaseId, updatedProducts, stockHistory: srvHist } = event.payload || {};
-        if (event.sourceDeviceId !== myDeviceId) {
+        const { purchaseId, updatedProducts, suppliers: srvSup, stockHistory: srvHist } = event.payload || {};
+        if (isRemote) {
           if (purchaseId) setPurchases((prev) => prev.filter((p) => p.id !== purchaseId));
           if (Array.isArray(updatedProducts)) setProducts(updatedProducts);
+          if (Array.isArray(srvSup)) setSuppliers(srvSup);
           if (Array.isArray(srvHist)) setStockHistory(srvHist);
         }
       } else if (event.type === 'return:processed') {
         const { saleReturn, updatedProducts, customerLedgers, stockHistory: srvHist } = event.payload || {};
-        if (saleReturn && event.sourceDeviceId !== myDeviceId) {
+        if (saleReturn && isRemote) {
           setSaleReturns((prev) => {
             if (prev.some((r) => r.returnNumber === saleReturn.returnNumber)) return prev;
             return [saleReturn, ...prev];
@@ -703,36 +847,70 @@ export default function App() {
           if (Array.isArray(updatedProducts)) setProducts(updatedProducts);
           if (Array.isArray(customerLedgers)) setCustomerLedgerEntries(customerLedgers);
           if (Array.isArray(srvHist)) setStockHistory(srvHist);
-          showToast(`⚡ Real-Time Sync: Return #${saleReturn.returnNumber} restocked.`, 'info');
+          showToast(`Real-Time Sync: Return #${saleReturn.returnNumber} restocked.`, 'info');
         }
       } else if (event.type === 'purchase_return:processed') {
-        const { purchaseReturn, updatedProducts, stockHistory: srvHist } = event.payload || {};
-        if (purchaseReturn && event.sourceDeviceId !== myDeviceId) {
+        const { purchaseReturn, updatedProducts, suppliers: srvSup, stockHistory: srvHist } = event.payload || {};
+        if (purchaseReturn && isRemote) {
           setPurchaseReturns((prev) => {
             if (prev.some((r) => r.returnNumber === purchaseReturn.returnNumber)) return prev;
             return [purchaseReturn, ...prev];
           });
           if (Array.isArray(updatedProducts)) setProducts(updatedProducts);
+          if (Array.isArray(srvSup)) setSuppliers(srvSup);
           if (Array.isArray(srvHist)) setStockHistory(srvHist);
         }
       } else if (event.type === 'stock:updated') {
-        if (Array.isArray(event.payload) && event.sourceDeviceId !== myDeviceId) {
-          setProducts(event.payload);
+        if (isRemote) {
+          if (Array.isArray(event.payload)) {
+            setProducts(event.payload);
+          } else if (event.payload?.products && Array.isArray(event.payload.products)) {
+            setProducts(event.payload.products);
+            if (Array.isArray(event.payload.stockHistory)) setStockHistory(event.payload.stockHistory);
+          }
         }
       } else if (event.type === 'customer:ledger_updated') {
-        if (event.payload?.customers) setCustomers(event.payload.customers);
-        if (event.payload?.customerLedgers) setCustomerLedgerEntries(event.payload.customerLedgers);
+        if (isRemote) {
+          if (Array.isArray(event.payload?.customers)) setCustomers(event.payload.customers);
+          if (Array.isArray(event.payload?.customerLedgers)) setCustomerLedgerEntries(event.payload.customerLedgers);
+        }
+      } else if (event.type === 'supplier:ledger_updated') {
+        if (isRemote) {
+          if (Array.isArray(event.payload?.suppliers)) setSuppliers(event.payload.suppliers);
+          if (Array.isArray(event.payload?.supplierLedgers)) setSupplierLedgers(event.payload.supplierLedgers);
+        }
+      } else if (event.type === 'categories:updated') {
+        if (isRemote && Array.isArray(event.payload)) {
+          setCategories(event.payload);
+        }
+      } else if (event.type === 'expenses:updated') {
+        if (isRemote && Array.isArray(event.payload)) {
+          setExpenses(event.payload);
+        }
+      } else if (event.type === 'staff:updated') {
+        if (isRemote && Array.isArray(event.payload)) {
+          setStaffList(event.payload);
+        }
+      } else if (event.type === 'daily_hisab:updated') {
+        if (isRemote && event.payload && typeof event.payload === 'object') {
+          setDailyHisab(event.payload);
+          try {
+            localStorage.setItem('waqas_mart_daily_hisab_v2', JSON.stringify(event.payload));
+          } catch {}
+        }
+      } else if (event.type === 'printer:updated') {
+        if (isRemote && event.payload) {
+          setPrinterSettings(event.payload);
+          savePrinterSettings(event.payload);
+        }
+      } else if (event.type === 'receipt:updated') {
+        if (isRemote && event.payload) {
+          setReceiptSettings(event.payload);
+          localStorage.setItem(STORAGE_KEYS.RECEIPT_SETTINGS, JSON.stringify(event.payload));
+        }
       } else if (event.type === 'store:sync') {
-        const store = event.payload;
-        if (store) {
-          if (Array.isArray(store.products)) setProducts(store.products);
-          if (Array.isArray(store.transactions)) setTransactions(store.transactions);
-          if (Array.isArray(store.purchases)) setPurchases(store.purchases);
-          if (Array.isArray(store.customers)) setCustomers(store.customers);
-          if (Array.isArray(store.customerLedgers)) setCustomerLedgerEntries(store.customerLedgers);
-          if (Array.isArray(store.heldBills)) setHeldBills(store.heldBills);
-          if (Array.isArray(store.stockHistory)) setStockHistory(store.stockHistory);
-          if (store.branding) setBranding(store.branding);
+        if (event.payload) {
+          applyServerStoreSnapshot(event.payload);
         }
       } else if (event.type === 'device:revoked') {
         if (event.payload?.deviceId === myDeviceId) {
@@ -740,10 +918,20 @@ export default function App() {
         }
       } else if (event.type === 'device:pairing_request') {
         showToast(`Pairing request received from ${event.payload?.candidateDevice?.deviceName || 'new device'}. Check Device Management.`, 'info');
+      } else if (event.type === 'auth:shop_restricted') {
+        syncService.closeSse();
+        clearLocalShopWorkspaceState('');
+        setAuthSession(null);
+        setIsPairedTerminal(false);
+        setAuthNotice(event.payload?.message || 'This shop account has been suspended or restricted.');
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      unsubscribeStatus();
+    };
   }, []);
 
   // Store Branding & Theme Configuration
@@ -835,78 +1023,94 @@ export default function App() {
     } catch {}
   };
 
-  // Reset All Records to Zero (User Request: "pehle say app koi stok ya etam ya hisab naho sub zero hu")
-  const handleResetAllZero = async () => {
-    if (window.confirm('کیا آپ تمام اسٹاک، پروڈکٹس اور حساب زیرو (Zero) کرنا چاہتے ہیں؟ (Reset all store records to 0)')) {
-      setProducts([]);
-      setCart([]);
-      setTransactions([]);
-      setPurchases([]);
-      setHeldBills([]);
-      setCustomers([]);
-      setCustomerLedgerEntries([]);
-      setSaleReturns([]);
-      setSupplierLedgers([]);
-      setExpenses([]);
-      setPurchaseReturns([]);
-      setStaffList([]);
-      localStorage.setItem(STORAGE_KEYS.INVENTORY, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.PURCHASES, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.HELD_BILLS, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.CUSTOMER_LEDGERS, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.RETURNS, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.SUPPLIER_LEDGERS, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.PURCHASE_RETURNS, JSON.stringify([]));
-      localStorage.setItem(STORAGE_KEYS.STAFF, JSON.stringify([]));
-      showToast('تمام اسٹاک، سیلز اور حساب زیرو کر دیا گیا ہے۔ (Store reset to 0)', 'info');
-      try {
-        await syncService.postMutation('reset_all_zero', {});
-      } catch {}
-    }
+  const handleUpdateBranding = (nextBranding: StoreBranding) => {
+    setBranding(nextBranding);
+    try {
+      localStorage.setItem(STORAGE_KEYS.BRANDING, JSON.stringify(nextBranding));
+    } catch {}
+    syncService.updateBranding(nextBranding);
   };
 
-  // Handlers for 6 New Pages:
+  const handleUpdateCategories = (nextCategories: CategoryInfo[]) => {
+    setCategories(nextCategories);
+    syncService.syncCategories(nextCategories);
+  };
+
+  const handleSaveDailyHisab = (nextHisab: Record<string, Record<string, Partial<DailyHisabRow>>>) => {
+    setDailyHisab(nextHisab);
+    try {
+      localStorage.setItem('waqas_mart_daily_hisab_v2', JSON.stringify(nextHisab));
+    } catch {}
+    syncService.syncDailyHisab(nextHisab);
+  };
+
+  // Reset All Records to Zero via in-app modal confirmation (zero window.confirm)
+  const executeResetAllZero = async () => {
+    setProducts([]);
+    setCart([]);
+    setTransactions([]);
+    setPurchases([]);
+    setHeldBills([]);
+    setCustomers([]);
+    setCustomerLedgerEntries([]);
+    setSaleReturns([]);
+    setSupplierLedgers([]);
+    setExpenses([]);
+    setPurchaseReturns([]);
+    setStaffList([]);
+    localStorage.setItem(STORAGE_KEYS.INVENTORY, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.PURCHASES, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.HELD_BILLS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.CUSTOMER_LEDGERS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.RETURNS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.SUPPLIER_LEDGERS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.PURCHASE_RETURNS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.STAFF, JSON.stringify([]));
+    setIsResetAllZeroConfirmOpen(false);
+    showToast('All stock, sales, and ledger balances have been reset to 0.', 'info');
+    try {
+      await syncService.postMutation('reset_all_zero', {});
+    } catch {}
+  };
+
+  const handleResetAllZero = () => {
+    setIsResetAllZeroConfirmOpen(true);
+  };
+
+  // Handlers for Suppliers & Ledgers:
   const handleSaveSupplier = (supplier: Supplier) => {
-    setSuppliers((prev) => {
-      const idx = prev.findIndex((s) => s.id === supplier.id);
-      if (idx > -1) {
-        const next = [...prev];
-        next[idx] = supplier;
-        return next;
-      }
-      return [supplier, ...prev];
-    });
+    const idx = suppliers.findIndex((s) => s.id === supplier.id);
+    const next = idx > -1 ? suppliers.map((s) => (s.id === supplier.id ? supplier : s)) : [supplier, ...suppliers];
+    setSuppliers(next);
+    syncService.syncSupplierLedgers(next, supplierLedgers);
   };
 
   const handleDeleteSupplier = (supplierId: string) => {
-    setSuppliers((prev) => prev.filter((s) => s.id !== supplierId));
+    const next = suppliers.filter((s) => s.id !== supplierId);
+    setSuppliers(next);
+    syncService.syncSupplierLedgers(next, supplierLedgers);
   };
 
   const handleSaveSupplierLedgerEntry = (entry: SupplierLedgerEntry) => {
-    setSupplierLedgers((prev) => {
-      const idx = prev.findIndex((e) => e.id === entry.id);
-      if (idx > -1) {
-        const next = [...prev];
-        next[idx] = entry;
-        return next;
-      }
-      return [entry, ...prev];
-    });
+    const idx = supplierLedgers.findIndex((e) => e.id === entry.id);
+    const next = idx > -1 ? supplierLedgers.map((e) => (e.id === entry.id ? entry : e)) : [entry, ...supplierLedgers];
+    setSupplierLedgers(next);
+    syncService.syncSupplierLedgers(suppliers, next);
   };
 
   const handleDeleteSupplierLedgerEntry = (entryId: string) => {
-    setSupplierLedgers((prev) => prev.filter((e) => e.id !== entryId));
+    const next = supplierLedgers.filter((e) => e.id !== entryId);
+    setSupplierLedgers(next);
+    syncService.syncSupplierLedgers(suppliers, next);
   };
 
   const handleDeleteAllSupplierLedgers = (supplierId?: string) => {
-    if (supplierId) {
-      setSupplierLedgers((prev) => prev.filter((e) => e.supplierId !== supplierId));
-    } else {
-      setSupplierLedgers([]);
-    }
+    const next = supplierId ? supplierLedgers.filter((e) => e.supplierId !== supplierId) : [];
+    setSupplierLedgers(next);
+    syncService.syncSupplierLedgers(suppliers, next);
   };
 
   const handleSaveExpense = (expense: ExpenseEntry) => {
@@ -957,14 +1161,14 @@ export default function App() {
         const idx = next.findIndex((p) => p.id === item.productId || (item.barcode && p.barcode === item.barcode));
         if (idx > -1) {
           const prevStock = Number(next[idx].stock) || 0;
-          const nextStock = Math.max(0, prevStock - item.quantity);
+          const nextStock = prevStock - item.quantity;
           histEntries.push({
             id: `stk-pret-${Date.now()}-${next[idx].id}`,
             productId: next[idx].id,
             productName: next[idx].name,
             barcode: next[idx].barcode,
             previousStock: prevStock,
-            quantityChange: -(prevStock - nextStock),
+            quantityChange: -item.quantity,
             newStock: nextStock,
             transactionType: 'Purchase Return',
             invoiceNumber: ret.returnNumber,
@@ -996,11 +1200,14 @@ export default function App() {
   };
 
   const handleDeletePurchaseReturn = (returnId: string) => {
-    setPurchaseReturns((prev) => prev.filter((r) => r.id !== returnId));
+    const next = purchaseReturns.filter((r) => r.id !== returnId);
+    setPurchaseReturns(next);
+    syncService.postMutation('sync_purchase_returns', next);
   };
 
   const handleDeleteAllPurchaseReturns = () => {
     setPurchaseReturns([]);
+    syncService.postMutation('sync_purchase_returns', []);
   };
 
   const handleSaveStaff = (staff: StaffMember) => {
@@ -1044,11 +1251,6 @@ export default function App() {
   const handleSaveDvrConfig = (config: DvrNvrConfig) => {
     setDvrConfig(config);
     showToast('DVR / NVR configuration saved successfully', 'success');
-  };
-
-  const handleSaveSecurityConfig = (config: SecurityConfig) => {
-    setSecurityConfig(config);
-    showToast('Security settings updated successfully', 'success');
   };
 
   // Add Product to Cart with Stock Protection (normal sales cannot exceed available stock)
@@ -1165,8 +1367,32 @@ export default function App() {
   };
 
   const handleBarcodeDetected = (code: string) => {
-    if (activeNav === 'New Sale POS') {
+    if (activeNav === 'New Sale POS' || activeNav === 'New Sale' || activeNav === 'New Sale Page' || activeNav === 'POS Terminal' || activeNav === 'New POS') {
       setScannedBarcodeForNewPos(code);
+      setIsScannerOpen(false);
+      return;
+    }
+    if (
+      activeNav === 'New Purchase Entry' ||
+      activeNav === 'New Purchase' ||
+      activeNav === 'Purchase Entry' ||
+      activeNav === 'Old Purchase' ||
+      activeNav === 'Classic Purchase' ||
+      activeNav === 'Old Purchase Entry'
+    ) {
+      setScannedBarcodeForPurchase(code);
+      setIsScannerOpen(false);
+      return;
+    }
+    if (
+      activeNav === 'Total Stock' ||
+      activeNav === 'Products' ||
+      activeNav === 'Stock' ||
+      activeNav === 'Stock Management' ||
+      activeNav === 'Products Management' ||
+      activeNav === 'Barcode Management'
+    ) {
+      setScannedBarcodeForTools(code);
       setIsScannerOpen(false);
       return;
     }
@@ -1252,16 +1478,29 @@ export default function App() {
   };
 
   const handleAddSupplier = (supplier: Supplier) => {
-    setSuppliers((prev) => [supplier, ...prev]);
+    const next = [supplier, ...suppliers];
+    setSuppliers(next);
+    syncService.syncSupplierLedgers(next, supplierLedgers);
     showToast(`Supplier "${supplier.name}" added to ledgers.`, 'success');
   };
 
-  const handleSaveNewProduct = (newProd: Product) => {
-    setProducts((prev) => {
-      const next = [newProd, ...prev];
-      syncService.syncStock(next);
-      return next;
-    });
+  const handleSaveNewProduct = (newProd: Product): { ok: boolean; message?: string } => {
+    const cleanBarcode = (newProd.barcode || '').trim().toLowerCase();
+    if (cleanBarcode) {
+      const duplicate = products.find(
+        (p) => p.id !== newProd.id && (p.barcode || '').trim().toLowerCase() === cleanBarcode
+      );
+      if (duplicate) {
+        sounds.playErrorTone();
+        const msg = `Duplicate barcode "${newProd.barcode}" is already assigned to "${duplicate.name}".`;
+        showToast(msg, 'error');
+        return { ok: false, message: msg };
+      }
+    }
+
+    const next = [newProd, ...products];
+    setProducts(next);
+    syncService.syncStock(next);
     if ((Number(newProd.stock) || 0) > 0) {
       appendStockTransactions([
         {
@@ -1287,23 +1526,33 @@ export default function App() {
     }
     sounds.playSuccessChime();
     showToast(`Product "${newProd.name}" saved to inventory!`, 'success');
+    return { ok: true };
   };
 
-  const handleSaveProduct = (prod: Product) => {
-    setProducts((prev) => {
-      const idx = prev.findIndex((p) => p.id === prod.id);
-      if (idx > -1) {
-        const next = [...prev];
-        // Enforce stock protection: editing product details preserves actual stock
-        next[idx] = { ...prod, stock: prev[idx].stock };
-        syncService.syncStock(next);
-        return next;
+  const handleSaveProduct = (prod: Product): { ok: boolean; message?: string } => {
+    const cleanBarcode = (prod.barcode || '').trim().toLowerCase();
+    if (cleanBarcode) {
+      const duplicate = products.find(
+        (p) => p.id !== prod.id && (p.barcode || '').trim().toLowerCase() === cleanBarcode
+      );
+      if (duplicate) {
+        sounds.playErrorTone();
+        const msg = `Duplicate barcode "${prod.barcode}" belongs to "${duplicate.name}".`;
+        showToast(msg, 'error');
+        return { ok: false, message: msg };
       }
-      syncService.syncStock([prod, ...prev]);
-      return [prod, ...prev];
-    });
+    }
+
+    const idx = products.findIndex((p) => p.id === prod.id);
+    const next =
+      idx > -1
+        ? products.map((p, i) => (i === idx ? { ...prod, stock: p.stock } : p))
+        : [prod, ...products];
+    setProducts(next);
+    syncService.syncStock(next);
     sounds.playSuccessChime();
     showToast(`Product "${prod.name}" updated in inventory!`, 'success');
+    return { ok: true };
   };
 
   const handleDeleteProduct = (productId: string) => {
@@ -1530,6 +1779,7 @@ export default function App() {
   const handleDeleteAllHeldBills = () => {
     setHeldBills([]);
     localStorage.setItem(STORAGE_KEYS.HELD_BILLS, JSON.stringify([]));
+    syncService.postMutation('delete_all_held_bills', {});
     sounds.playSuccessChime();
     showToast('All held bills permanently deleted.', 'info');
   };
@@ -1544,35 +1794,37 @@ export default function App() {
 
   const handleDeleteAllPurchases = () => {
     if (purchases.length === 0) return;
+    let nextProducts = [...products];
+    let nextSuppliers = [...suppliers];
     purchases.forEach((p) => {
-      setProducts((prev) =>
-        prev.map((prod) => {
-          const item = p.items?.find((i) => i.productId === prod.id);
-          if (item) {
-            return {
-              ...prod,
-              stock: Math.max(0, prod.stock - item.quantity),
-            };
-          }
-          return prod;
-        })
-      );
-      setSuppliers((prev) =>
-        prev.map((sup) => {
-          if (sup.id === p.supplierId) {
-            return {
-              ...sup,
-              payableBalance: Math.max(0, sup.payableBalance - p.remainingBalance),
-            };
-          }
-          return sup;
-        })
-      );
+      nextProducts = nextProducts.map((prod) => {
+        const item = p.items?.find((i) => i.productId === prod.id);
+        if (item) {
+          return {
+            ...prod,
+            stock: (Number(prod.stock) || 0) - item.quantity,
+          };
+        }
+        return prod;
+      });
+      nextSuppliers = nextSuppliers.map((sup) => {
+        if (sup.id === p.supplierId) {
+          return {
+            ...sup,
+            payableBalance: Math.max(0, (Number(sup.payableBalance) || 0) - (Number(p.remainingBalance) || 0)),
+          };
+        }
+        return sup;
+      });
     });
 
+    const clearedCount = purchases.length;
+    setProducts(nextProducts);
+    setSuppliers(nextSuppliers);
     setPurchases([]);
+    syncService.postMutation('delete_all_purchases', { products: nextProducts, suppliers: nextSuppliers });
     sounds.playSuccessChime();
-    showToast(`All ${purchases.length} purchase records deleted and stock reversed.`, 'info');
+    showToast(`All ${clearedCount} purchase records deleted and stock reversed.`, 'info');
   };
 
   const handleDeleteAllCustomers = () => {
@@ -1580,6 +1832,7 @@ export default function App() {
     setCustomerLedgerEntries([]);
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify([]));
     localStorage.setItem(STORAGE_KEYS.CUSTOMER_LEDGERS, JSON.stringify([]));
+    syncService.syncLedgers([], []);
     sounds.playSuccessChime();
     showToast('All customers and customer ledgers permanently deleted.', 'info');
   };
@@ -1746,12 +1999,13 @@ export default function App() {
     setTransactions((prev) => [transaction, ...prev]);
     syncService.syncSale(transaction);
 
-    // If Credit / Pay Later or partial credit sale: record into Customer Ledger exactly once!
+    // If Credit / Pay Later or partial credit sale: record into Customer Ledger deterministically
     if (details.method === 'credit' && details.customerName) {
       let cust = customers.find((c) =>
         (details.customerId && c.id === details.customerId) ||
         c.name.toLowerCase() === details.customerName?.toLowerCase()
       );
+      let nextCustomers = customers;
 
       if (!cust) {
         cust = {
@@ -1761,7 +2015,8 @@ export default function App() {
           previousBalance: 0,
           createdAt: new Date().toLocaleDateString('en-GB'),
         };
-        setCustomers((prev) => [cust!, ...prev]);
+        nextCustomers = [cust, ...customers];
+        setCustomers(nextCustomers);
       }
 
       const advancePaid = details.cashTendered || 0;
@@ -1769,8 +2024,9 @@ export default function App() {
 
       if (unpaidCredit > 0) {
         const todayFormatted = new Date().toLocaleDateString('en-GB'); // DD/MM/YYYY
+        const ledgerId = `LED-SALE-${invoiceNumber}`;
         const ledgerEntry: CustomerLedgerEntry = {
-          id: `entry-${Date.now()}`,
+          id: ledgerId,
           customerId: cust.id,
           date: todayFormatted,
           details: `POS Sale Invoice #${invoiceNumber}`,
@@ -1782,8 +2038,16 @@ export default function App() {
           createdAt: new Date().toISOString(),
         };
 
-        setCustomerLedgerEntries((prev) => [...prev, ledgerEntry]);
+        const nextLedgers = customerLedgerEntries.some((l) => l.id === ledgerId)
+          ? customerLedgerEntries
+          : [...customerLedgerEntries, ledgerEntry];
+        setCustomerLedgerEntries(nextLedgers);
+        if (nextCustomers !== customers) {
+          syncService.syncLedgers(nextCustomers, nextLedgers);
+        }
         showToast(`Udhar of ${formatRs(unpaidCredit)} recorded in ${cust.name}'s ledger!`, 'info');
+      } else if (nextCustomers !== customers) {
+        syncService.syncLedgers(nextCustomers, customerLedgerEntries);
       }
     }
 
@@ -1903,33 +2167,36 @@ export default function App() {
     setTransactions((prev) => [transaction, ...prev]);
     syncService.syncSale(transaction);
 
-    // 3. Customer Khata Udhar recording
+    // 3. Customer Khata Udhar recording (deterministic LED-SALE-* ID matching server)
     if (invoiceData.paymentMethod === 'credit' && (invoiceData.customerId || invoiceData.customerName)) {
       let cust = customers.find(
         (c) =>
           (invoiceData.customerId && c.id === invoiceData.customerId) ||
           (invoiceData.customerName && c.name.toLowerCase() === invoiceData.customerName.toLowerCase())
       );
+      let nextCustomers = customers;
       if (!cust && invoiceData.customerName) {
         cust = {
-          id: invoiceData.customerId || ("cust-" + Date.now()),
+          id: invoiceData.customerId || `cust-${Date.now()}`,
           name: invoiceData.customerName,
           phone: invoiceData.customerPhone,
           previousBalance: 0,
           createdAt: new Date().toLocaleDateString('en-GB'),
         };
-        if (cust) { const newCust = cust; setCustomers((prev) => [newCust, ...prev]); }
+        nextCustomers = [cust, ...customers];
+        setCustomers(nextCustomers);
       }
       if (cust) {
         const advancePaid = invoiceData.cashTendered || 0;
         const unpaidCredit = Math.max(0, invoiceData.grandTotal - advancePaid);
         if (unpaidCredit > 0) {
           const todayFormatted = new Date().toLocaleDateString('en-GB');
+          const ledgerId = `LED-SALE-${invoiceData.invoiceNumber}`;
           const ledgerEntry: CustomerLedgerEntry = {
-            id: "entry-" + Date.now(),
+            id: ledgerId,
             customerId: cust.id,
             date: todayFormatted,
-            details: "POS Sale Invoice #" + invoiceData.invoiceNumber,
+            details: `POS Sale Invoice #${invoiceData.invoiceNumber}`,
             credit: unpaidCredit,
             debit: 0,
             runningBalance: (cust.previousBalance || 0) + unpaidCredit,
@@ -1937,7 +2204,15 @@ export default function App() {
             paymentMethod: 'Credit / Pay Later',
             createdAt: new Date().toISOString(),
           };
-          setCustomerLedgerEntries((prev) => [...prev, ledgerEntry]);
+          const nextLedgers = customerLedgerEntries.some((l) => l.id === ledgerId)
+            ? customerLedgerEntries
+            : [...customerLedgerEntries, ledgerEntry];
+          setCustomerLedgerEntries(nextLedgers);
+          if (nextCustomers !== customers) {
+            syncService.syncLedgers(nextCustomers, nextLedgers);
+          }
+        } else if (nextCustomers !== customers) {
+          syncService.syncLedgers(nextCustomers, customerLedgerEntries);
         }
       }
     }
@@ -1975,36 +2250,33 @@ export default function App() {
   };
 
   const handleSaveCustomer = (customer: Customer) => {
-    setCustomers((prev) => {
-      const idx = prev.findIndex((c) => c.id === customer.id);
-      if (idx > -1) {
-        const next = [...prev];
-        next[idx] = customer;
-        return next;
-      }
-      return [customer, ...prev];
-    });
+    const idx = customers.findIndex((c) => c.id === customer.id);
+    const next = idx > -1 ? customers.map((c) => (c.id === customer.id ? customer : c)) : [customer, ...customers];
+    setCustomers(next);
+    syncService.syncLedgers(next, customerLedgerEntries);
   };
 
   const handleDeleteCustomer = (customerId: string) => {
-    setCustomers((prev) => prev.filter((c) => c.id !== customerId));
-    setCustomerLedgerEntries((prev) => prev.filter((e) => e.customerId !== customerId));
+    const nextCustomers = customers.filter((c) => c.id !== customerId);
+    const nextLedgers = customerLedgerEntries.filter((e) => e.customerId !== customerId);
+    setCustomers(nextCustomers);
+    setCustomerLedgerEntries(nextLedgers);
+    syncService.syncLedgers(nextCustomers, nextLedgers);
   };
 
   const handleSaveLedgerEntry = (entry: CustomerLedgerEntry) => {
-    setCustomerLedgerEntries((prev) => {
-      const idx = prev.findIndex((e) => e.id === entry.id);
-      if (idx > -1) {
-        const next = [...prev];
-        next[idx] = entry;
-        return next;
-      }
-      return [...prev, entry];
-    });
+    const idx = customerLedgerEntries.findIndex((e) => e.id === entry.id);
+    const next = idx > -1
+      ? customerLedgerEntries.map((e) => (e.id === entry.id ? entry : e))
+      : [...customerLedgerEntries, entry];
+    setCustomerLedgerEntries(next);
+    syncService.syncLedgers(customers, next);
   };
 
   const handleDeleteLedgerEntry = (entryId: string) => {
-    setCustomerLedgerEntries((prev) => prev.filter((e) => e.id !== entryId));
+    const next = customerLedgerEntries.filter((e) => e.id !== entryId);
+    setCustomerLedgerEntries(next);
+    syncService.syncLedgers(customers, next);
   };
 
   // Filtered Products for POS
@@ -2046,93 +2318,239 @@ export default function App() {
     setSupplierLedgers((prev) => prev.filter((e) => e.id !== entryId));
   };
 
-  // Central Navigation Dispatcher - Guarantees accurate screen routing for all 22 pages & modules
-  const handleNavigate = (page: string) => {
-    if (page === 'New Sale POS' || page === 'New Sale Page' || page === 'New Sale' || page === 'New POS' || page === 'POS Terminal') {
-      setActiveNav('New Sale POS');
-      setMode('sale');
-    } else if (page === 'Sale POS' || page === 'Classic Sale POS' || page === 'Old Sale Page' || page === 'Old Sale' || page === 'Classic Sale') {
-      setActiveNav('Sale POS');
-      setMode('sale');
-    } else if (page === 'New Purchase Entry' || page === 'New Purchase') {
-      setActiveNav('New Purchase Entry');
-      setMode('purchase');
-    } else if (page === 'Purchase Entry' || page === 'Classic Purchase' || page === 'Old Purchase Entry' || page === 'Old Purchase') {
-      setActiveNav('Purchase Entry');
-      setMode('purchase');
-    } else if (page === 'Sale Returns' || page === 'Return Mode' || page === 'Sales Return') {
-      setActiveNav('Sale Returns');
-      setMode('return');
-    } else if (page === 'Daily Hisab') {
-      setActiveNav('Daily Hisab');
-    } else if (page === 'Customer Ledgers' || page === 'All Customer Udhar' || page === 'Customers / Udhaar' || page === 'Customers' || page === 'Udhaar') {
-      setActiveNav('Customer Ledgers');
-      setSelectedLedgerCustomerId(null);
-    } else if (page === 'Supplier Ledgers' || page === 'Suppliers') {
-      setActiveNav('Supplier Ledgers');
-    } else if (page === 'Expenses') {
-      setActiveNav('Expenses');
-    } else if (page === 'Purchase Returns') {
-      setActiveNav('Purchase Returns');
-    } else if (page === 'All Staff' || page === 'Staff' || page === 'Staff Management') {
-      setActiveNav('All Staff');
-    } else if (page === 'CCTV' || page === 'Cameras') {
-      setActiveNav('CCTV');
-    } else if (page === 'Reports' || page === 'Sale Summary') {
-      setActiveNav('Sale Summary');
-    } else if (page === 'Total Stock' || page === 'Products' || page === 'Stock') {
-      setActiveNav('Total Stock');
-    } else if (page === 'Connect New Device') {
-      setIsConnectQrOpen(true);
-    } else if (page === 'Settings' || page === 'Owner Profiles') {
-      setIsSettingsOpen(true);
-    } else if (page === 'Device Management') {
-      setActiveNav('Device Management');
-    } else {
-      setActiveNav(page);
+  const activeRole = authSession?.user?.role;
+  const staffPermissions: StaffModulePermissions | null =
+    activeRole === 'STAFF'
+      ? { ...DEFAULT_STAFF_PERMISSIONS, ...(authSession?.user?.permissions || {}) }
+      : null;
+  const canViewCostAndProfit =
+    activeRole === 'STAFF' ? Boolean(staffPermissions?.canViewCostAndProfit) : true;
+
+  const canAccessNav = (nav: string): boolean => {
+    if (activeRole !== 'STAFF' || !staffPermissions) return true;
+    const p = staffPermissions;
+    switch (nav) {
+      case 'Home':
+        return true;
+      case 'New Sale POS':
+      case 'New Sale':
+      case 'New Sale Page':
+      case 'POS Terminal':
+      case 'New POS':
+        return Boolean(p.newSale);
+      case 'Sale POS':
+      case 'Old Sale':
+      case 'Classic Sale POS':
+      case 'Classic Sale':
+      case 'Old Sale Page':
+      case 'Sale Returns':
+      case 'Sale Return':
+      case 'Return Mode':
+      case 'Sales Return':
+        return Boolean(p.oldSale);
+      case 'New Purchase Entry':
+      case 'New Purchase':
+        return Boolean(p.newPurchase);
+      case 'Purchase Entry':
+      case 'Old Purchase':
+      case 'Classic Purchase':
+      case 'Old Purchase Entry':
+      case 'Purchase Returns':
+      case 'Purchase Return':
+        return Boolean(p.oldPurchase);
+      case 'Total Stock':
+      case 'Stock':
+      case 'Stock Management':
+        return Boolean(p.stock);
+      case 'Products':
+      case 'Products Management':
+      case 'Barcode Management':
+        return Boolean(p.products);
+      case 'Customers':
+      case 'Customers Management':
+      case 'Customer Udhar':
+      case 'Customer Udhaar':
+      case 'Udhaar':
+      case 'Customer Ledgers':
+      case 'Customer Ledger':
+      case 'All Customer Udhar':
+      case 'Customers / Udhaar':
+        return Boolean(p.customers || p.canAccessLedgers);
+      case 'Suppliers':
+      case 'Suppliers Management':
+      case 'Supplier Payments':
+      case 'Supplier Ledgers':
+      case 'Supplier Ledger':
+        return Boolean(p.suppliers || p.canAccessLedgers);
+      case 'Expenses':
+        return Boolean(p.expenses);
+      case 'Daily Hisab':
+      case 'Sale Summary':
+      case 'Sales Reports':
+      case 'Reports':
+      case 'Purchase Reports':
+      case 'Stock Reports':
+        return Boolean(p.reports || p.canAccessReports);
+      case 'Profit & Loss Reports':
+        return Boolean((p.reports || p.canAccessReports) && p.canViewCostAndProfit);
+      case 'Printer Settings':
+        return Boolean(p.printing);
+      case 'All Staff':
+      case 'Staff':
+      case 'Staff Management':
+      case 'Device Management':
+      case 'QR Code Connection':
+      case 'Connect New Device':
+      case 'Application Settings':
+      case 'Settings':
+      case 'Owner Profiles':
+      case 'Backup & Restore':
+      case 'Backup and Restore':
+      case 'Security & Login':
+      case 'Security and Login':
+      case 'CCTV':
+      case 'Cameras':
+        return Boolean(p.settings || p.canAccessSettings);
+      default:
+        return true;
     }
   };
 
-  // Desktop Left Sidebar Navigation Items matching Screenshot 1
-  const sidebarNavItems = [
-    { id: 'Home', label: 'Home', icon: Home },
-    { id: 'New Sale POS', label: 'New Sale Page', icon: ShoppingBag },
-    { id: 'Sale POS', label: 'Classic Sale POS', icon: ShoppingCart },
-    { id: 'New Purchase Entry', label: 'New Purchase Entry', icon: Truck },
-    { id: 'Purchase Entry', label: 'Classic Purchase', icon: FileText },
-    { id: 'Products', label: 'Products', icon: Package },
-    { id: 'Total Stock', label: 'Total Stock', icon: Layers },
-    { id: 'Customer Ledgers', label: 'Customer Ledgers', icon: Users },
-    { id: 'Supplier Ledgers', label: 'Supplier Ledgers', icon: Truck },
-    { id: 'Daily Hisab', label: 'Daily Hisab', icon: FileSpreadsheet },
-    { id: 'Expenses', label: 'Expenses', icon: Wallet },
-    { id: 'Cash Book / Wallets', label: 'Cash Book / Wallets', icon: CreditCard },
-    { id: 'Sale Returns', label: 'Sale Returns', icon: RotateCcw },
-    { id: 'Purchase Returns', label: 'Purchase Returns', icon: Undo },
-    { id: 'All Staff', label: 'All Staff', icon: UserCheck },
-    { id: 'CCTV', label: 'CCTV Cameras', icon: Camera },
-    { id: 'Reports', label: 'Reports', icon: TrendingUp },
-    { id: 'Device Management', label: 'Device Management', icon: Smartphone },
-    { id: 'Settings', label: 'Settings', icon: Settings },
-  ];
+  // Central Navigation Dispatcher - Guarantees distinct routing for ALL 29 application pages & modules
+  const handleNavigate = (page: string) => {
+    let nextTarget = page;
+    if (page === 'Home') {
+      nextTarget = 'Home';
+    } else if (page === 'New Sale POS' || page === 'New Sale Page' || page === 'New Sale' || page === 'New POS' || page === 'POS Terminal') {
+      nextTarget = 'New Sale POS';
+    } else if (page === 'Sale POS' || page === 'Classic Sale POS' || page === 'Old Sale Page' || page === 'Old Sale' || page === 'Classic Sale') {
+      nextTarget = 'Sale POS';
+    } else if (page === 'New Purchase Entry' || page === 'New Purchase') {
+      nextTarget = 'New Purchase Entry';
+    } else if (page === 'Purchase Entry' || page === 'Classic Purchase' || page === 'Old Purchase Entry' || page === 'Old Purchase') {
+      nextTarget = 'Purchase Entry';
+    } else if (page === 'Sale Returns' || page === 'Sale Return' || page === 'Return Mode' || page === 'Sales Return') {
+      nextTarget = 'Sale Returns';
+    } else if (page === 'Purchase Returns' || page === 'Purchase Return') {
+      nextTarget = 'Purchase Returns';
+    } else if (page === 'Daily Hisab') {
+      nextTarget = 'Daily Hisab';
+    } else if (page === 'Customers' || page === 'Customers Management') {
+      nextTarget = 'Customers';
+    } else if (page === 'Customer Udhar' || page === 'Customer Udhaar' || page === 'Udhaar') {
+      nextTarget = 'Customer Udhar';
+    } else if (page === 'Customer Ledgers' || page === 'Customer Ledger' || page === 'All Customer Udhar' || page === 'Customers / Udhaar') {
+      nextTarget = 'Customer Ledgers';
+    } else if (page === 'Suppliers' || page === 'Suppliers Management') {
+      nextTarget = 'Suppliers';
+    } else if (page === 'Supplier Payments') {
+      nextTarget = 'Supplier Payments';
+    } else if (page === 'Supplier Ledgers' || page === 'Supplier Ledger') {
+      nextTarget = 'Supplier Ledgers';
+    } else if (page === 'Expenses') {
+      nextTarget = 'Expenses';
+    } else if (page === 'All Staff' || page === 'Staff' || page === 'Staff Management') {
+      nextTarget = 'All Staff';
+    } else if (page === 'CCTV' || page === 'Cameras') {
+      nextTarget = 'CCTV';
+    } else if (page === 'Sale Summary' || page === 'Sales Reports' || page === 'Reports') {
+      nextTarget = 'Sale Summary';
+    } else if (page === 'Purchase Reports') {
+      nextTarget = 'Purchase Reports';
+    } else if (page === 'Profit & Loss Reports') {
+      nextTarget = 'Profit & Loss Reports';
+    } else if (page === 'Stock Reports') {
+      nextTarget = 'Stock Reports';
+    } else if (page === 'Products' || page === 'Products Management') {
+      nextTarget = 'Products';
+    } else if (page === 'Total Stock' || page === 'Stock' || page === 'Stock Management') {
+      nextTarget = 'Total Stock';
+    } else if (page === 'Barcode Management') {
+      nextTarget = 'Barcode Management';
+    } else if (page === 'Device Management') {
+      nextTarget = 'Device Management';
+    } else if (page === 'QR Code Connection') {
+      nextTarget = 'QR Code Connection';
+    } else if (page === 'Connect New Device') {
+      if (!canAccessNav('Connect New Device')) {
+        showToast('Access denied: Staff permission required for Device Pairing.', 'error');
+        return;
+      }
+      setIsConnectQrOpen(true);
+      return;
+    } else if (page === 'Printer Settings') {
+      nextTarget = 'Printer Settings';
+    } else if (page === 'Application Settings' || page === 'Settings' || page === 'Owner Profiles') {
+      nextTarget = 'Application Settings';
+    } else if (page === 'Backup & Restore' || page === 'Backup and Restore') {
+      nextTarget = 'Backup & Restore';
+    } else if (page === 'Security & Login' || page === 'Security and Login') {
+      nextTarget = 'Security & Login';
+    }
 
-  // Single Password Lock Screen on every application launch
-  if (!isUnlocked) {
-    return <LoginGateway onUnlockSuccess={handleUnlockSuccess} deferredPrompt={deferredPrompt} />;
+    if (!canAccessNav(nextTarget)) {
+      showToast(`Access denied: your staff account does not have permission for "${nextTarget}".`, 'error');
+      return;
+    }
+
+    if (
+      nextTarget === 'Customers' ||
+      nextTarget === 'Customer Udhar' ||
+      nextTarget === 'Customer Ledgers'
+    ) {
+      setSelectedLedgerCustomerId(null);
+    }
+    if (nextTarget === 'New Sale POS' || nextTarget === 'Sale POS') {
+      setMode('sale');
+    } else if (nextTarget === 'New Purchase Entry' || nextTarget === 'Purchase Entry') {
+      setMode('purchase');
+    } else if (nextTarget === 'Sale Returns') {
+      setMode('return');
+    }
+    setActiveNav(nextTarget);
+  };
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-[100dvh] w-full bg-[#022c16] text-white flex flex-col items-center justify-center p-6">
+        <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center mb-3 animate-pulse">
+          <Crown className="w-6 h-6 text-amber-400" />
+        </div>
+        <p className="text-sm font-black tracking-wide uppercase">WAQAS POS SOFTWARE</p>
+        <p className="text-xs text-emerald-300 mt-1">Verifying secure session...</p>
+      </div>
+    );
   }
 
-  const isHomePage = activeNav === 'Home';
-  const isNewSalePage = activeNav === 'New Sale POS' || activeNav === 'New Sale' || activeNav === 'New Sale Page' || activeNav === 'POS Terminal' || activeNav === 'New POS';
-  const isOldSalePage = activeNav === 'Sale POS' || activeNav === 'Old Sale' || activeNav === 'Classic Sale POS' || activeNav === 'Classic Sale' || activeNav === 'Old Sale Page';
-  const isPurchaseWorkstationPage = activeNav === 'New Purchase Entry' || activeNav === 'New Purchase' || activeNav === 'Purchase Entry' || activeNav === 'Old Purchase' || activeNav === 'Classic Purchase' || activeNav === 'Old Purchase Entry';
+  // Centralized Auth Gateway when unauthenticated and not a paired terminal
+  if (!authSession && !isPairedTerminal) {
+    return (
+      <LoginGateway
+        onLoginSuccess={handleLoginSuccess}
+        onPairedSuccess={handlePairedSuccess}
+        initialNotice={authNotice}
+        deferredPrompt={deferredPrompt}
+      />
+    );
+  }
+
+  // Super Admin Authority Console (Completely separate from Shop POS workspaces)
+  if (authSession?.user?.role === 'SUPER_ADMIN') {
+    return <SuperAdminDashboard authUser={authSession.user} onSignOut={handleSignOut} />;
+  }
+
+  const effectiveNav = canAccessNav(activeNav) ? activeNav : 'Home';
+  const isHomePage = effectiveNav === 'Home';
+  const isNewSalePage = effectiveNav === 'New Sale POS' || effectiveNav === 'New Sale' || effectiveNav === 'New Sale Page' || effectiveNav === 'POS Terminal' || effectiveNav === 'New POS';
+  const isOldSalePage = effectiveNav === 'Sale POS' || effectiveNav === 'Old Sale' || effectiveNav === 'Classic Sale POS' || effectiveNav === 'Classic Sale' || effectiveNav === 'Old Sale Page';
+  const isPurchaseWorkstationPage = effectiveNav === 'New Purchase Entry' || effectiveNav === 'New Purchase' || effectiveNav === 'Purchase Entry' || effectiveNav === 'Old Purchase' || effectiveNav === 'Classic Purchase' || effectiveNav === 'Old Purchase Entry';
 
   return (
     <div className="h-[100dvh] w-full max-w-full bg-[#f8fafc] text-slate-900 flex flex-col font-sans overflow-hidden">
       {/* MAIN CONTENT WORKSPACE (Allows complete vertical scrolling for every page) */}
       <main className={`flex-1 flex flex-col min-w-0 min-h-0 w-full ${isPurchaseWorkstationPage ? 'overflow-hidden pb-0' : isNewSalePage || isOldSalePage ? 'overflow-y-auto overflow-x-hidden pb-0' : 'overflow-y-auto overflow-x-hidden pb-16 lg:pb-0'} overscroll-y-contain`}>
-        {/* CONDITIONAL PAGE RENDER (ALL 22 EXISTING PAGES & MODULES) */}
-        {activeNav === 'Device Management' || activeNav === 'Connect New Device' ? (
-          /* PAGE 19: MULTI-DEVICE MANAGEMENT & QR TERMINAL CONNECTIONS */
+        {/* CONDITIONAL PAGE RENDER (ALL 29 APPLICATION PAGES + MODULES) */}
+        {effectiveNav === 'Device Management' || effectiveNav === 'Connect New Device' ? (
           <DeviceManagementPage
             currentDevice={currentDevice}
             branding={branding}
@@ -2142,12 +2560,96 @@ export default function App() {
             onOpenPwaInstall={() => setIsPwaInstallOpen(true)}
             isPwaInstallable={true}
           />
-        ) : activeNav === 'Daily Hisab' ? (
-          /* PAGE 12: DAILY HISAB EXCEL SPREADSHEET */
+        ) : effectiveNav === 'QR Code Connection' ? (
+          <QrConnectionPage
+            currentDevice={currentDevice}
+            branding={branding}
+            onOpenGenerateQr={() => setIsConnectQrOpen(true)}
+            onOpenPairThisDevice={() => setIsPairModalOpen(true)}
+            onNavigateDevices={() => setActiveNav('Device Management')}
+            onBackToHome={() => setActiveNav('Home')}
+          />
+        ) : effectiveNav === 'Barcode Management' ? (
+          <BarcodeManagementPage
+            products={products}
+            branding={branding}
+            onSaveProduct={handleSaveProduct}
+            onOpenScanner={() => setIsScannerOpen(true)}
+            onOpenAddProduct={() => setIsAddProductOpen(true)}
+            onBackToHome={() => setActiveNav('Home')}
+            initialSearch={scannedBarcodeForTools || ''}
+          />
+        ) : effectiveNav === 'Printer Settings' ? (
+          <PrinterSettingsModal
+            isOpen={true}
+            asPage={true}
+            onClose={() => setActiveNav('Home')}
+            branding={branding}
+            onSettingsUpdated={(updated) => {
+              setPrinterSettings(updated);
+              syncService.syncPrinterSettings(updated);
+            }}
+          />
+        ) : effectiveNav === 'Application Settings' || effectiveNav === 'Settings' || effectiveNav === 'Owner Profiles' ? (
+          <BrandingSettingsModal
+            isOpen={true}
+            asPage={true}
+            onClose={() => setActiveNav('Home')}
+            branding={branding}
+            currentUser={currentUser}
+            onSaveBranding={(updated) => {
+              handleUpdateBranding(updated);
+              showToast('Store branding & Owner Profile saved and synced!', 'success');
+            }}
+            onOpenReceiptDesigner={() => setIsReceiptDesignerOpen(true)}
+            onOpenPrinterSettings={() => setActiveNav('Printer Settings')}
+            onOpenResetSystem={() => setIsResetSystemOpen(true)}
+          />
+        ) : effectiveNav === 'Backup & Restore' || effectiveNav === 'Backup and Restore' ? (
+          <BackupRestorePage
+            currentStore={{
+              products,
+              categories,
+              transactions,
+              purchases,
+              customers,
+              customerLedgers: customerLedgerEntries,
+              saleReturns,
+              purchaseReturns,
+              suppliers,
+              supplierLedgers,
+              heldBills,
+              expenses,
+              staffList,
+              stockHistory,
+              dailyHisab,
+              branding,
+              receiptSettings,
+            }}
+            onRestoreApplied={(restored) => {
+              applyServerStoreSnapshot(restored);
+              showToast('Backup restored and synchronized across connected devices!', 'success');
+            }}
+            onBackToHome={() => setActiveNav('Home')}
+          />
+        ) : effectiveNav === 'Security & Login' || effectiveNav === 'Security and Login' ? (
+          <SecuritySettingsPage
+            currentDevice={currentDevice}
+            authUser={authSession?.user || null}
+            shopName={branding.storeName || authSession?.shop?.shopName || 'WAQAS MART'}
+            branding={branding}
+            onSignOut={handleSignOut}
+            onNavigate={handleNavigate}
+            onBackToHome={() => setActiveNav('Home')}
+          />
+        ) : effectiveNav === 'Daily Hisab' ? (
           <DailyHisabExcelPage
             transactions={transactions}
             purchases={purchases}
             customerLedgerEntries={customerLedgerEntries}
+            expenses={expenses}
+            serverDailyHisab={dailyHisab}
+            onSyncDailyHisab={handleSaveDailyHisab}
             branding={branding}
             onNavigateToSummary={() => setActiveNav('Sale Summary')}
             onNavigateToLedgers={() => {
@@ -2156,12 +2658,26 @@ export default function App() {
             }}
             onBackToHome={() => setActiveNav('Home')}
           />
-        ) : activeNav === 'Customer Ledgers' || activeNav === 'All Customer Udhar' || activeNav === 'Customers / Udhaar' || activeNav === 'Customers' || activeNav === 'Udhaar' ? (
-          /* PAGE 8 & 10: CUSTOMER UDHAR LEDGERS & GRAND LEDGER */
+        ) : effectiveNav === 'Customers' ||
+          effectiveNav === 'Customers Management' ||
+          effectiveNav === 'Customer Udhar' ||
+          effectiveNav === 'Customer Udhaar' ||
+          effectiveNav === 'Udhaar' ||
+          effectiveNav === 'Customer Ledgers' ||
+          effectiveNav === 'Customer Ledger' ||
+          effectiveNav === 'All Customer Udhar' ||
+          effectiveNav === 'Customers / Udhaar' ? (
           <CustomerLedgersPage
             customers={customers}
             ledgerEntries={customerLedgerEntries}
             branding={branding}
+            initialTab={
+              effectiveNav === 'Customers' || effectiveNav === 'Customers Management'
+                ? 'customers'
+                : effectiveNav === 'Customer Udhar' || effectiveNav === 'Customer Udhaar' || effectiveNav === 'Udhaar'
+                ? 'udhaar'
+                : 'ledger'
+            }
             onSaveCustomer={handleSaveCustomer}
             onDeleteCustomer={handleDeleteCustomer}
             onSaveLedgerEntry={handleSaveLedgerEntry}
@@ -2172,13 +2688,23 @@ export default function App() {
             onNavigateToDailyHisab={() => setActiveNav('Daily Hisab')}
             onBackToHome={() => setActiveNav('Home')}
           />
-        ) : activeNav === 'Supplier Ledgers' || activeNav === 'Suppliers' ? (
-          /* PAGE 9 & 11: SUPPLIER LEDGERS & DIRECTORY */
+        ) : effectiveNav === 'Suppliers' ||
+          effectiveNav === 'Suppliers Management' ||
+          effectiveNav === 'Supplier Payments' ||
+          effectiveNav === 'Supplier Ledgers' ||
+          effectiveNav === 'Supplier Ledger' ? (
           <SupplierLedgersPage
             suppliers={suppliers}
             purchases={purchases}
             ledgerEntries={supplierLedgers}
             branding={branding}
+            initialTab={
+              effectiveNav === 'Supplier Payments'
+                ? 'payments'
+                : effectiveNav === 'Supplier Ledgers' || effectiveNav === 'Supplier Ledger'
+                ? 'ledger'
+                : 'suppliers'
+            }
             onSaveLedgerEntry={handleSaveSupplierLedgerEntry}
             onDeleteLedgerEntry={handleDeleteSupplierLedgerEntry}
             onSaveSupplier={handleSaveSupplier}
@@ -2186,12 +2712,24 @@ export default function App() {
             onNavigateToPurchases={() => setActiveNav('New Purchase Entry')}
             onBackToHome={() => setActiveNav('Home')}
           />
-        ) : activeNav === 'Total Stock' || activeNav === 'Products' || activeNav === 'Stock' ? (
-          /* PAGE 6 & 7: TOTAL STOCK & PRODUCT MANAGEMENT (READ-ONLY STOCK) */
+        ) : effectiveNav === 'Total Stock' ||
+          effectiveNav === 'Stock' ||
+          effectiveNav === 'Stock Management' ||
+          effectiveNav === 'Products' ||
+          effectiveNav === 'Products Management' ? (
           <TotalStockPage
             products={products}
             categories={categories}
             stockHistory={stockHistory}
+            transactions={transactions}
+            purchases={purchases}
+            saleReturns={saleReturns}
+            purchaseReturns={purchaseReturns}
+            initialViewMode={
+              effectiveNav === 'Products' || effectiveNav === 'Products Management' ? 'products' : 'stock'
+            }
+            scannedBarcode={scannedBarcodeForTools}
+            onClearScannedBarcode={() => setScannedBarcodeForTools(null)}
             branding={branding}
             onSaveProduct={handleSaveProduct}
             onDeleteProduct={handleDeleteProduct}
@@ -2203,25 +2741,40 @@ export default function App() {
               setMode('sale');
             }}
             onBackToHome={() => setActiveNav('Home')}
+            canViewCostAndProfit={canViewCostAndProfit}
           />
-        ) : activeNav === 'Sale Summary' || activeNav === 'Reports' ? (
-          /* PAGE 15: SALE SUMMARY & ANALYTICS REPORTS */
+        ) : effectiveNav === 'Sale Summary' ||
+          effectiveNav === 'Sales Reports' ||
+          effectiveNav === 'Reports' ||
+          effectiveNav === 'Purchase Reports' ||
+          effectiveNav === 'Profit & Loss Reports' ||
+          effectiveNav === 'Stock Reports' ? (
           <SaleSummaryPage
             transactions={transactions}
             saleReturns={saleReturns}
             products={products}
             purchases={purchases}
+            expenses={expenses}
+            initialTab={
+              effectiveNav === 'Purchase Reports'
+                ? 'purchase'
+                : effectiveNav === 'Profit & Loss Reports'
+                ? 'profit'
+                : effectiveNav === 'Stock Reports'
+                ? 'stock'
+                : 'sales'
+            }
             branding={branding}
             onSelectInvoiceToPrint={(tx) => {
               setCurrentTransaction(tx);
               setIsReceiptOpen(true);
             }}
             onNavigate={(p) => handleNavigate(p)}
-            activeNav={activeNav}
+            activeNav={effectiveNav}
             onBackToHome={() => setActiveNav('Home')}
+            canViewCostAndProfit={canViewCostAndProfit}
           />
-        ) : activeNav === 'New Sale POS' || activeNav === 'New Sale' || activeNav === 'New Sale Page' || activeNav === 'POS Terminal' || activeNav === 'New POS' ? (
-          /* PAGE 2 & 16: NEW SALE POS WORKSTATION / POS TERMINAL */
+        ) : effectiveNav === 'New Sale POS' || effectiveNav === 'New Sale' || effectiveNav === 'New Sale Page' || effectiveNav === 'POS Terminal' || effectiveNav === 'New POS' ? (
           <NewSalePosPage
             products={products}
             customers={customers}
@@ -2247,11 +2800,11 @@ export default function App() {
             }}
             resumedBill={resumedNewSaleBill}
             onClearResumedBill={() => setResumedNewSaleBill(null)}
-            onSwitchToOldSale={() => setActiveNav('Sale POS')}
+            onSwitchToOldSale={() => handleNavigate('Sale POS')}
             onBackToHome={() => setActiveNav('Home')}
+            canViewCostAndProfit={canViewCostAndProfit}
           />
-        ) : activeNav === 'Sale POS' || activeNav === 'Old Sale' || activeNav === 'Classic Sale POS' || activeNav === 'Classic Sale' || activeNav === 'Old Sale Page' ? (
-          /* PAGE 3: OLD SALE (CLASSIC SALE POS WORKSTATION) */
+        ) : effectiveNav === 'Sale POS' || effectiveNav === 'Old Sale' || effectiveNav === 'Classic Sale POS' || effectiveNav === 'Classic Sale' || effectiveNav === 'Old Sale Page' ? (
           <SalePosPage
             products={products}
             categories={categories}
@@ -2310,7 +2863,7 @@ export default function App() {
             onConfirmCheckout={handleConfirmCheckout}
             onDeleteTransaction={(invNum) => {
               setTransactions((prev) => prev.filter((t) => t.invoiceNumber !== invNum));
-              showToast(`Invoice #${invNum} deleted successfully (انوائس ڈیلیٹ ہو گئی)`, 'info');
+              showToast(`Invoice #${invNum} deleted successfully`, 'info');
             }}
             onEditTransaction={(tx) => {
               setCart(tx.items);
@@ -2319,8 +2872,7 @@ export default function App() {
               showToast(`Invoice #${tx.invoiceNumber} loaded into cart for editing.`, 'info');
             }}
           />
-        ) : activeNav === 'New Purchase Entry' || activeNav === 'New Purchase' ? (
-          /* PAGE 4: NEW PURCHASE ENTRY (EXACT REFERENCE SCREENSHOT WORKSTATION) */
+        ) : effectiveNav === 'New Purchase Entry' || effectiveNav === 'New Purchase' ? (
           <NewPurchaseEntryPage
             products={products}
             suppliers={suppliers}
@@ -2328,19 +2880,17 @@ export default function App() {
             branding={branding}
             currentUser={currentUser}
             currentDevice={currentDevice}
+            scannedBarcode={scannedBarcodeForPurchase}
+            onClearScannedBarcode={() => setScannedBarcodeForPurchase(null)}
             onSavePurchase={handleSavePurchase}
             onDeletePurchase={handleDeletePurchase}
             onAddSupplier={handleAddSupplier}
             onOpenAddProduct={() => setIsAddProductOpen(true)}
             onOpenScanner={() => setIsScannerOpen(true)}
             onNavigate={handleNavigate}
-            onUpdateBranding={(b) => {
-              setBranding(b);
-              localStorage.setItem(STORAGE_KEYS.BRANDING, JSON.stringify(b));
-            }}
+            onUpdateBranding={handleUpdateBranding}
           />
-        ) : activeNav === 'Purchase Entry' || activeNav === 'Old Purchase' || activeNav === 'Classic Purchase' || activeNav === 'Old Purchase Entry' ? (
-          /* PAGE 5: OLD PURCHASE (SAME IMAGE 1 WORKSTATION + AUTHORIZED EDITING & NEGATIVE QTY ADJUSTMENT) */
+        ) : effectiveNav === 'Purchase Entry' || effectiveNav === 'Old Purchase' || effectiveNav === 'Classic Purchase' || effectiveNav === 'Old Purchase Entry' ? (
           <div className="flex-1 flex flex-col w-full h-full min-h-0 overflow-hidden">
             <PurchaseEntryPage
               products={products}
@@ -2349,6 +2899,8 @@ export default function App() {
               branding={branding}
               currentUser={currentUser}
               currentDevice={currentDevice}
+              scannedBarcode={scannedBarcodeForPurchase}
+              onClearScannedBarcode={() => setScannedBarcodeForPurchase(null)}
               onSavePurchase={handleSavePurchase}
               onDeletePurchase={handleDeletePurchase}
               onDeleteAllPurchases={handleDeleteAllPurchases}
@@ -2359,8 +2911,7 @@ export default function App() {
               onBackToHome={() => setActiveNav('Home')}
             />
           </div>
-        ) : activeNav === 'Sale Returns' || activeNav === 'Return Mode' || activeNav === 'Sales Return' ? (
-          /* PAGE: SALE RETURN MODE (REAL RETURN, INVOICE LOOKUP & AUTOMATIC RESTOCKING) */
+        ) : effectiveNav === 'Sale Returns' || effectiveNav === 'Sale Return' || effectiveNav === 'Return Mode' || effectiveNav === 'Sales Return' ? (
           <SaleReturnCenter
             products={products}
             transactions={transactions}
@@ -2377,8 +2928,7 @@ export default function App() {
             }}
             onBackToHome={() => setActiveNav('Home')}
           />
-        ) : activeNav === 'Expenses' ? (
-          /* PAGE 13: EXPENSES TRACKER */
+        ) : effectiveNav === 'Expenses' ? (
           <ExpensesPage
             expenses={expenses}
             branding={branding}
@@ -2387,8 +2937,7 @@ export default function App() {
             onDeleteAllExpenses={handleDeleteAllExpenses}
             onBackToHome={() => setActiveNav('Home')}
           />
-        ) : activeNav === 'Purchase Returns' ? (
-          /* PAGE 14: PURCHASE RETURNS */
+        ) : effectiveNav === 'Purchase Returns' || effectiveNav === 'Purchase Return' ? (
           <PurchaseReturnsPage
             purchases={purchases}
             purchaseReturns={purchaseReturns}
@@ -2400,8 +2949,7 @@ export default function App() {
             onDeleteAllReturns={handleDeleteAllPurchaseReturns}
             onBackToHome={() => setActiveNav('Home')}
           />
-        ) : activeNav === 'All Staff' || activeNav === 'Staff' || activeNav === 'Staff Management' ? (
-          /* PAGE 18: ALL STAFF MANAGEMENT */
+        ) : effectiveNav === 'All Staff' || effectiveNav === 'Staff' || effectiveNav === 'Staff Management' ? (
           <AllStaffPage
             staffList={staffList}
             branding={branding}
@@ -2410,8 +2958,7 @@ export default function App() {
             onDeleteAllStaff={handleDeleteAllStaff}
             onBackToHome={() => setActiveNav('Home')}
           />
-        ) : activeNav === 'CCTV' || activeNav === 'Cameras' ? (
-          /* PAGE 17: CCTV & SECURITY CAMERAS */
+        ) : effectiveNav === 'CCTV' || effectiveNav === 'Cameras' ? (
           <CctvPage
             cameras={cctvCameras}
             dvrConfig={dvrConfig}
@@ -2421,7 +2968,6 @@ export default function App() {
             onBackToHome={() => setActiveNav('Home')}
           />
         ) : (
-          /* PAGE 1 & DEFAULT: ULTRA-MODERN HOME DASHBOARD + 16 ACTION TILES */
           <HomePage
             products={products}
             transactions={transactions}
@@ -2433,7 +2979,7 @@ export default function App() {
             currentUser={currentUser}
             currentDevice={currentDevice}
             branding={branding}
-            onUpdateBranding={setBranding}
+            onUpdateBranding={handleUpdateBranding}
             onUpdateUser={setCurrentUser}
             onNavigate={handleNavigate}
             onOpenScanner={() => setIsScannerOpen(true)}
@@ -2454,7 +3000,19 @@ export default function App() {
             onOpenPrinterSettings={() => setIsPrinterSettingsOpen(true)}
             onOpenResetSystem={() => setIsResetSystemOpen(true)}
             deferredPrompt={deferredPrompt}
-            shopId={branding.terminalDeviceId || 'WM-001'}
+            shopId={authSession?.user?.shopId || branding.terminalDeviceId || 'WM-001'}
+            syncStatus={syncStatus}
+            authUser={authSession?.user || null}
+            staffPermissions={staffPermissions}
+            onSignOut={handleSignOut}
+            onSyncNow={() => {
+              syncService.forceFullSync().then((store) => {
+                if (store) {
+                  applyServerStoreSnapshot(store);
+                  showToast('All devices synchronized with latest business data.', 'success');
+                }
+              });
+            }}
           />
         )}
       </main>
@@ -2478,64 +3036,72 @@ export default function App() {
           </button>
 
           {/* 2. SALE */}
-          <button
-            type="button"
-            onClick={() => handleNavigate('New Sale POS')}
-            className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] py-1 transition-colors cursor-pointer ${
-              activeNav === 'New Sale POS' || activeNav === 'Sale POS'
-                ? 'text-blue-600 font-black'
-                : 'text-slate-400 hover:text-slate-700 font-semibold'
-            }`}
-            title="Sale POS Workstation"
-          >
-            <ShoppingCart className="w-5 h-5 stroke-[2]" />
-            <span className="text-[10px] font-bold uppercase mt-0.5 tracking-wider">Sale</span>
-          </button>
+          {canAccessNav('New Sale POS') && (
+            <button
+              type="button"
+              onClick={() => handleNavigate('New Sale POS')}
+              className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] py-1 transition-colors cursor-pointer ${
+                effectiveNav === 'New Sale POS' || effectiveNav === 'Sale POS'
+                  ? 'text-blue-600 font-black'
+                  : 'text-slate-400 hover:text-slate-700 font-semibold'
+              }`}
+              title="Sale POS Workstation"
+            >
+              <ShoppingCart className="w-5 h-5 stroke-[2]" />
+              <span className="text-[10px] font-bold uppercase mt-0.5 tracking-wider">Sale</span>
+            </button>
+          )}
 
           {/* 3. PURCHASE */}
-          <button
-            type="button"
-            onClick={() => handleNavigate('New Purchase Entry')}
-            className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] py-1 transition-colors cursor-pointer ${
-              activeNav === 'New Purchase Entry' || activeNav === 'Purchase Entry' || activeNav === 'Purchase Returns'
-                ? 'text-blue-600 font-black'
-                : 'text-slate-400 hover:text-slate-700 font-semibold'
-            }`}
-            title="Purchase Entry"
-          >
-            <Truck className="w-5 h-5 stroke-[2]" />
-            <span className="text-[10px] font-bold uppercase mt-0.5 tracking-wider">Purchase</span>
-          </button>
+          {canAccessNav('New Purchase Entry') && (
+            <button
+              type="button"
+              onClick={() => handleNavigate('New Purchase Entry')}
+              className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] py-1 transition-colors cursor-pointer ${
+                effectiveNav === 'New Purchase Entry' || effectiveNav === 'Purchase Entry' || effectiveNav === 'Purchase Returns'
+                  ? 'text-blue-600 font-black'
+                  : 'text-slate-400 hover:text-slate-700 font-semibold'
+              }`}
+              title="Purchase Entry"
+            >
+              <Truck className="w-5 h-5 stroke-[2]" />
+              <span className="text-[10px] font-bold uppercase mt-0.5 tracking-wider">Purchase</span>
+            </button>
+          )}
 
           {/* 4. REPORTS */}
-          <button
-            type="button"
-            onClick={() => handleNavigate('Sale Summary')}
-            className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] py-1 transition-colors cursor-pointer ${
-              activeNav === 'Sale Summary' || activeNav === 'Reports' || activeNav === 'Daily Hisab'
-                ? 'text-blue-600 font-black'
-                : 'text-slate-400 hover:text-slate-700 font-semibold'
-            }`}
-            title="Reports & Analytics"
-          >
-            <TrendingUp className="w-5 h-5 stroke-[2]" />
-            <span className="text-[10px] font-bold uppercase mt-0.5 tracking-wider">Reports</span>
-          </button>
+          {canAccessNav('Sale Summary') && (
+            <button
+              type="button"
+              onClick={() => handleNavigate('Sale Summary')}
+              className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] py-1 transition-colors cursor-pointer ${
+                effectiveNav === 'Sale Summary' || effectiveNav === 'Reports' || effectiveNav === 'Daily Hisab'
+                  ? 'text-blue-600 font-black'
+                  : 'text-slate-400 hover:text-slate-700 font-semibold'
+              }`}
+              title="Reports & Analytics"
+            >
+              <TrendingUp className="w-5 h-5 stroke-[2]" />
+              <span className="text-[10px] font-bold uppercase mt-0.5 tracking-wider">Reports</span>
+            </button>
+          )}
 
           {/* 5. SETTINGS */}
-          <button
-            type="button"
-            onClick={() => setIsSettingsOpen(true)}
-            className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] py-1 transition-colors cursor-pointer ${
-              isSettingsOpen || activeNav === 'Settings'
-                ? 'text-blue-600 font-black'
-                : 'text-slate-400 hover:text-slate-700 font-semibold'
-            }`}
-            title="Settings & System Database"
-          >
-            <Settings className="w-5 h-5 stroke-[2]" />
-            <span className="text-[10px] font-bold uppercase mt-0.5 tracking-wider">Settings</span>
-          </button>
+          {canAccessNav('Application Settings') && (
+            <button
+              type="button"
+              onClick={() => handleNavigate('Application Settings')}
+              className={`flex flex-col items-center justify-center min-w-[56px] min-h-[44px] py-1 transition-colors cursor-pointer ${
+                isSettingsOpen || effectiveNav === 'Settings' || effectiveNav === 'Application Settings'
+                  ? 'text-blue-600 font-black'
+                  : 'text-slate-400 hover:text-slate-700 font-semibold'
+              }`}
+              title="Settings & System Database"
+            >
+              <Settings className="w-5 h-5 stroke-[2]" />
+              <span className="text-[10px] font-bold uppercase mt-0.5 tracking-wider">Settings</span>
+            </button>
+          )}
         </nav>
       )}
 
@@ -2564,7 +3130,7 @@ export default function App() {
         existingProducts={products}
         onClose={() => setIsAddProductOpen(false)}
         onSaveProduct={handleSaveNewProduct}
-        onUpdateCategories={setCategories}
+        onUpdateCategories={handleUpdateCategories}
       />
 
       {/* Held Bills Modal */}
@@ -2625,8 +3191,8 @@ export default function App() {
         receiptSettings={receiptSettings}
         onOpenPrinterSettings={() => setIsPrinterSettingsOpen(true)}
         onSaveReceiptSettings={(updated) => {
-          setReceiptSettings(updated);
-          showToast('رسید کی ترتیبات کامیابی سے محفوظ ہو گئیں! (Receipt settings saved)', 'success');
+          handleSaveReceiptSettings(updated);
+          showToast('Receipt settings saved and synced!', 'success');
         }}
         onClose={() => setIsReceiptOpen(false)}
         onNewSale={() => {
@@ -2653,8 +3219,8 @@ export default function App() {
         branding={branding}
         currentUser={currentUser}
         onSaveBranding={(updated) => {
-          setBranding(updated);
-          showToast('Store branding & Owner Profile saved successfully! (برانڈنگ اور پروفائل محفوظ ہو گئی ہے)', 'success');
+          handleUpdateBranding(updated);
+          showToast('Store branding & Owner Profile saved and synced!', 'success');
         }}
         onOpenReceiptDesigner={() => {
           setIsSettingsOpen(false);
@@ -2694,8 +3260,8 @@ export default function App() {
         onClose={() => setIsReceiptDesignerOpen(false)}
         settings={receiptSettings}
         onSaveSettings={(updated) => {
-          setReceiptSettings(updated);
-          showToast('رسید کی نئی ترتیبات اور مالک کی تصویر محفوظ ہو گئی ہے!', 'success');
+          handleSaveReceiptSettings(updated);
+          showToast('Receipt layout & owner details saved and synced!', 'success');
         }}
         sampleTransaction={currentTransaction || (transactions.length > 0 ? transactions[0] : null)}
       />
@@ -2715,19 +3281,10 @@ export default function App() {
         onClose={() => setIsPairModalOpen(false)}
         onPairSuccess={(dev, serverStore) => {
           setIsPairModalOpen(false);
-          setCurrentDevice(dev);
-          if (serverStore) {
-            if (serverStore.products && serverStore.products.length > 0) setProducts(serverStore.products);
-            if (serverStore.transactions && serverStore.transactions.length > 0) setTransactions(serverStore.transactions);
-            if (serverStore.purchases && serverStore.purchases.length > 0) setPurchases(serverStore.purchases);
-            if (serverStore.customers && serverStore.customers.length > 0) setCustomers(serverStore.customers);
-            if (serverStore.customerLedgers && serverStore.customerLedgers.length > 0) setCustomerLedgerEntries(serverStore.customerLedgers);
-          }
+          handlePairedSuccess(dev, serverStore);
           showToast(`Successfully paired this terminal to WAQAS MART!`, 'success');
         }}
       />
-
-
 
       {/* PWA Install Desktop & Mobile Prompt */}
       <PwaInstallPrompt
@@ -2745,6 +3302,179 @@ export default function App() {
             setIsPairModalOpen(true);
           }}
         />
+      )}
+
+      {/* Non-Home Compact Multi-Device Conflict / Offline Sync Pill */}
+      {!isHomePage && (!syncStatus.isOnline || syncStatus.pendingCount > 0 || syncStatus.conflicts.length > 0) && (
+        <div className="fixed bottom-18 lg:bottom-4 right-4 z-40 flex items-center gap-2">
+          {syncStatus.conflicts.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setIsConflictModalOpen(true)}
+              className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-black shadow-lg flex items-center gap-1.5 cursor-pointer"
+            >
+              <AlertTriangle className="w-4 h-4" />
+              <span>{syncStatus.conflicts.length} Sync Conflict</span>
+            </button>
+          )}
+          {(!syncStatus.isOnline || syncStatus.pendingCount > 0) && (
+            <button
+              type="button"
+              onClick={() =>
+                syncService.forceFullSync().then((store) => {
+                  if (store) {
+                    applyServerStoreSnapshot(store);
+                    showToast('Offline queue flushed & synced with server.', 'success');
+                  }
+                })
+              }
+              className="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black shadow-lg flex items-center gap-1.5 cursor-pointer"
+            >
+              <WifiOff className="w-3.5 h-3.5" />
+              <span>
+                {!syncStatus.isOnline ? 'Offline Mode' : 'Sync Pending'} ({syncStatus.pendingCount})
+              </span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Global Toast Notification Banner */}
+      {statusMessage && (
+        <div className="fixed top-4 right-4 z-[90] max-w-sm animate-in fade-in duration-150">
+          <div
+            className={`px-4 py-3 rounded-2xl shadow-xl border text-xs font-bold flex items-center gap-2.5 ${
+              statusMessage.type === 'error'
+                ? 'bg-red-50 border-red-300 text-red-900'
+                : statusMessage.type === 'success'
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                : 'bg-slate-900 border-slate-700 text-white'
+            }`}
+          >
+            {statusMessage.type === 'error' ? (
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+            ) : statusMessage.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <Wifi className="w-4 h-4 text-emerald-400 shrink-0" />
+            )}
+            <span className="flex-1">{statusMessage.text}</span>
+            <button
+              type="button"
+              onClick={() => setStatusMessage(null)}
+              className="p-0.5 rounded-lg opacity-70 hover:opacity-100 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Confirmation Modal: Reset All Store Records to Zero */}
+      {isResetAllZeroConfirmOpen && (
+        <div className="fixed inset-0 z-[95] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">Reset All Records to Zero?</h3>
+                <p className="text-xs text-slate-600 mt-1">
+                  This clears all stock, products, invoices, customer Udhaar, expenses, and staff across all connected devices. Use Backup &amp; Restore first if you want a saved copy.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsResetAllZeroConfirmOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={executeResetAllZero}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-black cursor-pointer"
+              >
+                Confirm Reset to 0
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sync Conflict Review Modal */}
+      {isConflictModalOpen && (
+        <div className="fixed inset-0 z-[95] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">Multi-Device Sync Conflicts</h3>
+                  <p className="text-[11px] text-slate-500">Newer changes were already saved on the server.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsConflictModalOpen(false)}
+                className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="max-h-64 overflow-y-auto space-y-2">
+              {syncStatus.conflicts.map((conf) => (
+                <div key={conf.id} className="p-3 rounded-2xl border border-red-200 bg-red-50/70 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-black uppercase text-red-800">{conf.action}</span>
+                    <button
+                      type="button"
+                      onClick={() => syncService.resolveConflict(conf.id)}
+                      className="px-2.5 py-1 rounded-lg bg-white border border-red-200 text-[10px] font-bold text-red-700 hover:bg-red-100 cursor-pointer"
+                    >
+                      Accept Server State
+                    </button>
+                  </div>
+                  <p className="text-xs text-red-900">{conf.message}</p>
+                </div>
+              ))}
+              {syncStatus.conflicts.length === 0 && (
+                <p className="text-xs text-slate-500 text-center py-4">All conflicts resolved.</p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  syncService.forceFullSync().then((s) => {
+                    if (s) applyServerStoreSnapshot(s);
+                  });
+                }}
+                className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Pull Latest Server Data</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  syncService.clearConflicts();
+                  setIsConflictModalOpen(false);
+                }}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                Dismiss All
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
